@@ -30,6 +30,13 @@ class CpuFreqHelper(object):
   @classmethod
   def available(cls):
     return os.path.isfile(cls.CPU_PATH + "scaling_driver")
+  
+  @classmethod
+  def info(cls):
+    if cls.available():
+      print ("DVFS settings:  driver = " + cls.get_driver() + ", governor = " + cls.get_governor())
+      print ("DVFS HW limits: " + str(cls.get_hw_min_freq()) + " - " + str(cls.get_hw_max_freq()) + " kHz")
+      print ("DVFS policy:    " + str(cls.get_gov_min_freq()) + " - " + str(cls.get_gov_max_freq()) + " kHz")
 
   @classmethod
   def get_string(cls, name):
@@ -45,7 +52,11 @@ class CpuFreqHelper(object):
 
   @classmethod
   def get_driver(cls):
-    return str.strip(cls.get_string("scaling_driver"))
+    return cls.get_string("scaling_driver").strip()
+
+  @classmethod
+  def get_governor(cls):
+    return cls.get_string("scaling_governor").strip()
 
   @classmethod
   def get_hw_min_freq(cls):
@@ -89,7 +100,7 @@ class LinuxPowercapHelper(object):
     return os.path.join(cls.package_path(pkg), fname)
 
   @classmethod
-  def package_list(cls):
+  def package_list(cls, domain="package-"):
     l = []
     pkg = 0
     while pkg < cls.PKG_MAX:
@@ -97,7 +108,7 @@ class LinuxPowercapHelper(object):
       if not os.path.isfile(fname):
         break;
       pkg_name = read_value(fname)  
-      if  pkg_name.startswith("package-"):
+      if pkg_name.startswith(domain):
         l += [pkg]
       pkg += 1
     return l
@@ -105,6 +116,26 @@ class LinuxPowercapHelper(object):
   @classmethod
   def available(cls):
     return os.path.isfile(cls.package_file(0, "constraint_0_power_limit_uw"))
+
+  @classmethod
+  def info(cls):
+    if cls.available():
+        cpus = cls.package_list()
+        outfmt = "RAPL {0} domains: count = {1}, hw_limit = {2} W, current_limit = {3} W" 
+        if len(cpus):
+          maxp = cls.get_package_hw_max_power(cpus[0]) / 1000000.
+          curp = cls.get_package_power_limit(cpus[0]) / 1000000.
+          print(outfmt.format("CPU ", len(cpus), maxp, curp))
+        psys = cls.package_list("psys")
+        if len(psys):
+          try:
+            maxp = cls.get_package_hw_max_power(psys[0]) / 1000000.
+          except OSError:
+            maxp = None
+          curp = cls.get_package_power_limit(psys[0]) / 1000000.
+          print(outfmt.format("PSYS", len(psys), maxp, curp))
+    else:
+        print("RAPL powercap not found.")
 
   @classmethod
   def get_package_hw_max_power(cls, pkg):
@@ -217,7 +248,6 @@ class FreqEcoPolicy(EcoPolicy):
     self.fmin = CpuFreqHelper.get_hw_min_freq()
     self.fmax = CpuFreqHelper.get_hw_max_freq()
     self.fstart = CpuFreqHelper.get_gov_max_freq()
-    print ("Detected driver: ", self.driver, "  fmin: ", self.fmin, "  fmax: ", self.fmax)
 
   def set_freq(self, freq):
     if not self.debug:
@@ -379,11 +409,18 @@ def read_config(args):
 
   return parser
 
+def diag():
+  LinuxPowercapHelper.info()
+  print("")
+  CpuFreqHelper.info()
+  print("")
 
 if __name__ == '__main__':
 
   args = parse_args()
   cfg = read_config(args)
+  
+  diag()
 
   ef = EcoFreq(cfg)
   ef.spin()
