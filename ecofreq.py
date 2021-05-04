@@ -28,6 +28,10 @@ class CpuFreqHelper(object):
   CPU_PATH = "/sys/devices/system/cpu/cpu0/cpufreq/"
 
   @classmethod
+  def available(cls):
+    return os.path.isfile(cls.CPU_PATH + "scaling_driver")
+
+  @classmethod
   def get_string(cls, name):
     try:
       return read_value(cls.CPU_PATH + name)
@@ -99,6 +103,10 @@ class LinuxPowercapHelper(object):
     return l
 
   @classmethod
+  def available(cls):
+    return os.path.isfile(cls.package_file(0, "constraint_0_power_limit_uw"))
+
+  @classmethod
   def get_package_hw_max_power(cls, pkg):
     return read_int_value(cls.package_file(pkg, "constraint_0_max_power_uw"))  
 
@@ -119,46 +127,24 @@ class LinuxPowercapHelper(object):
     for pkg in cls.package_list(): 
       cls.set_package_power_limit(pkg, power_uw)
 
-class EcoFreqConfig(object):
-  def __init__(self, args=None):
-     self.timeout = 900
-     self.freq_round = -3
-     self.debug = False
+class EmissionProvider(object):
+  def __init__(self, config):
+    self.interval = int(config["emission"]["interval"])
 
-     self.homedir = os.path.dirname(os.path.abspath(__file__))
-     if args and args.cfg_file:
-       self.cfg_file = args.cfg_file
-     else:
-       self.cfg_file = os.path.join(self.homedir, "ecofreq.cfg")
-
-     self.read_from_file()
-
-     if not args:
-       return
-
-     if args.co2token:
-       self.co2token = args.co2token
-
-  def read_from_file(self):
-    if not os.path.exists(self.cfg_file):
-      print("ERROR: Config file not found: ", self.cfg_file)
-      sys.exit(-1)
-
-    parser = configparser.ConfigParser()
-    parser.read(self.cfg_file)
-    co2 = parser["co2"]
-    if co2:
-      self.co2country = co2.get("Country")
-      self.co2token = co2.get("Token")
-      self.co2min = int(co2.get("Min"))
-      self.co2max = int(co2.get("Max"))
-      self.timeout = int(co2.get("Timeout", self.timeout))
-#    print ("config: ", self.co2country, self.co2token, self.co2min, self.co2max)
+  @classmethod
+  def from_config(cls, config):
+    prov_dict = {"co2signal" : CO2Signal, "mock" : MockCO2Provider }
+    p = config["emission"].get("Provider", "co2signal")
+    if p in prov_dict:
+      return prov_dict[p](config)  
+    else:
+      raise ValueError("Unknown emission provider: " + p)
 
 class CO2Signal(object):
   def __init__(self, config):
-    self.co2country = config.co2country
-    self.co2token = config.co2token
+    EmissionProvider.__init__(self, config)
+    self.co2country = config["co2signal"]["country"]
+    self.co2token = config["co2signal"]["token"]
 
     if not self.co2token:
       print ("ERROR: Please specify CO2Signal API token!")
@@ -181,19 +167,47 @@ class CO2Signal(object):
 
 class MockCO2Provider(object):
   def __init__(self, config):
-    self.co2min = 100 if config.co2min is None else config.co2min
-    self.co2max = 800 if config.co2max is None else config.co2max
+    EmissionProvider.__init__(self, config)
+    if 'mock' in config:
+      r = config['mock'].get('CO2Range', '100-800')
+    self.co2min, self.co2max = [int(x) for x in r.split("-")]
 
   def get_co2(self):
     return random.randint(self.co2min, self.co2max)
 
-class CO2Policy(object):
+class EcoPolicy(object):
   def __init__(self, config):
-    self.config = config
+    self.freq_round = 3
+    self.debug = False
+    r = config["policy"]["CO2Range"].lower()
+    if r == "auto":
+      self.co2min = self.co2max = -1
+    else:
+      self.co2min, self.co2max = [int(x) for x in r.split("-")]
 
-class FreqCO2Policy(CO2Policy):
+  @classmethod
+  def from_config(cls, config):
+    c = config["policy"]["Control"].lower()
+    t = config["policy"]["Type"].lower()
+    if c == "auto":
+      if LinuxPowercapHelper.available():
+        c = "power"
+      elif CpuFreqHelper.available():
+        c = "frequency"
+      else:
+        print ("ERROR: Power management interface not found!")
+        sys.exit(-1)
+
+    if c == "power" and t == "linear":
+      return LinearPowerEcoPolicy(config)
+    elif c == "frequency" and t == "linear":
+      return LinearFreqEcoPolicy(config)
+    else:
+      raise ValueError("Unknown policy: " + [c, t])
+
+class FreqEcoPolicy(EcoPolicy):
   def __init__(self, config):
-    CO2Policy.__init__(self, config)
+    EcoPolicy.__init__(self, config)
     self.driver = CpuFreqHelper.get_driver()
    
     if not self.driver:
@@ -206,7 +220,7 @@ class FreqCO2Policy(CO2Policy):
     print ("Detected driver: ", self.driver, "  fmin: ", self.fmin, "  fmax: ", self.fmax)
 
   def set_freq(self, freq):
-    if not self.config.debug:
+    if not self.debug:
       CpuPowerHelper.set_max_freq(freq)      
 
   def set_co2(self, co2):
@@ -216,34 +230,38 @@ class FreqCO2Policy(CO2Policy):
   def reset(self):
     self.set_freq(self.fmax)
 
-class LinearFreqCO2Policy(FreqCO2Policy):
+class LinearFreqEcoPolicy(FreqEcoPolicy):
 
   def __init__(self, config):
-    FreqCO2Policy.__init__(self, config)
+    FreqEcoPolicy.__init__(self, config)
 
   def co2freq(self, co2):
-    c = self.config
-    if co2 >= c.co2max:
+    if co2 >= self.co2max:
       k = 0.0
-    elif co2 <= c.co2min:
+    elif co2 <= self.co2min:
       k = 1.0
     else:
-      k = 1.0 - float(co2 - c.co2min) / (c.co2max - c.co2min)
+      k = 1.0 - float(co2 - self.co2min) / (self.co2max - self.co2min)
   #  k = max(min(k, 1.0), 0.)
     freq = self.fmin + (self.fmax - self.fmin) * k
-    freq = int(round(freq, c.freq_round))
+    freq = int(round(freq, self.freq_round))
     return freq
 
 
-class PowerCO2Policy(CO2Policy):
+class PowerEcoPolicy(EcoPolicy):
   def __init__(self, config):
-    CO2Policy.__init__(self, config)
+    EcoPolicy.__init__(self, config)
+    
+    if not LinuxPowercapHelper.available():
+      print ("ERROR: RAPL powercap driver not found!")
+      sys.exit(-1)
+
     self.pmax = LinuxPowercapHelper.get_package_hw_max_power(0)
     self.pmin = int(0.5*self.pmax)
     self.pstart = LinuxPowercapHelper.get_package_power_limit(0)
 
   def set_power(self, power_uw):
-    if not self.config.debug:
+    if not self.debug:
       LinuxPowercapHelper.set_power_limit(power_uw)
 
   def set_co2(self, co2):
@@ -253,17 +271,19 @@ class PowerCO2Policy(CO2Policy):
   def reset(self):
     self.set_power(self.pmax)
 
-class LinearPowerCO2Policy(PowerCO2Policy):
+class LinearPowerEcoPolicy(PowerEcoPolicy):
+  def __init__(self, config):
+    PowerEcoPolicy.__init__(self, config)
+
   def co2power(self, co2):
-    c = self.config
-    if co2 >= c.co2max:
+    if co2 >= self.co2max:
       k = 0.0
-    elif co2 <= c.co2min:
+    elif co2 <= self.co2min:
       k = 1.0
     else:
-      k = 1.0 - float(co2 - c.co2min) / (c.co2max - c.co2min)
+      k = 1.0 - float(co2 - self.co2min) / (self.co2max - self.co2min)
     power = self.pmin + (self.pmax - self.pmin) * k
-    power = int(round(power, c.freq_round))
+    power = int(round(power, self.freq_round))
     return power
 
 class CO2History(object):
@@ -285,11 +305,10 @@ class CO2History(object):
 class EcoFreq(object):
   def __init__(self, config):
     self.config = config
-#    self.co2provider = CO2Signal()
-    self.co2provider = MockCO2Provider(config)
-    self.co2policy = LinearFreqCO2Policy(config)
-#    self.co2policy = LinearPowerCO2Policy(config)
+    self.co2provider = EmissionProvider.from_config(config)
+    self.co2policy = EcoPolicy.from_config(config)
     self.co2history = CO2History(config)
+    self.debug = False
 
   def update_co2(self): 
     co2 = self.co2provider.get_co2()
@@ -301,14 +320,17 @@ class EcoFreq(object):
       co2 = "NA"
 
     ts = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-    freq  = CpuFreqHelper.get_gov_max_freq()
-    power = LinuxPowercapHelper.get_package_power_limit(0) 
+    freq = power = None
+    if CpuFreqHelper.available():
+      freq = CpuFreqHelper.get_gov_max_freq()
+    if LinuxPowercapHelper.available():
+      power = LinuxPowercapHelper.get_package_power_limit(0) 
     logstr = '{0}\t{1}\t{2}\t{3}'.format(ts, co2, freq, power)
 
     logstr += "\t" + str(self.co2history.min_co2()) + "\t" + str(self.co2history.max_co2())
 
     print (logstr)
-    if not self.config.debug:
+    if not self.debug:
       with open(LOG_FILE, "a") as logf:
         logf.write(logstr + "\n")
 
@@ -316,7 +338,7 @@ class EcoFreq(object):
     try:
       while 1:
         self.update_co2()
-        time.sleep(self.config.timeout)
+        time.sleep(self.co2provider.interval)
     except:
       e = sys.exc_info()
       print ("Exception: ", e)
@@ -329,10 +351,39 @@ def parse_args():
   args = parser.parse_args()
   return args
 
+def read_config(args):
+  def_dict = {'emission' : { 'Provider' : 'co2signal',
+                             'Interval' : '600'     },
+              'policy'   : { 'Control'  : 'auto',    
+                             'Type'     : 'Linear', 
+                             'CO2Range' : 'auto'    }        
+             }
+
+  homedir = os.path.dirname(os.path.abspath(__file__))
+  if args and args.cfg_file:
+    cfg_file = args.cfg_file
+  else:
+    cfg_file = os.path.join(homedir, "ecofreq.cfg")
+
+  if not os.path.exists(cfg_file):
+    print("ERROR: Config file not found: ", cfg_file)
+    sys.exit(-1)
+
+  parser = configparser.ConfigParser()
+  parser.read_dict(def_dict)
+  parser.read(cfg_file)
+ 
+  if args:
+     if args.co2token:
+       parser["co2signal"]["token"] = args.co2token
+
+  return parser
+
+
 if __name__ == '__main__':
 
   args = parse_args()
-  cfg = EcoFreqConfig(args)
+  cfg = read_config(args)
 
   ef = EcoFreq(cfg)
   ef.spin()
