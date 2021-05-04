@@ -26,6 +26,7 @@ def write_value(fname, val):
 
 class CpuFreqHelper(object):
   CPU_PATH = "/sys/devices/system/cpu/cpu0/cpufreq/"
+  KHZ, MHZ, GHZ = 1, 1000, 1000000
 
   @classmethod
   def available(cls):
@@ -35,8 +36,14 @@ class CpuFreqHelper(object):
   def info(cls):
     if cls.available():
       print ("DVFS settings:  driver = " + cls.get_driver() + ", governor = " + cls.get_governor())
-      print ("DVFS HW limits: " + str(cls.get_hw_min_freq()) + " - " + str(cls.get_hw_max_freq()) + " kHz")
-      print ("DVFS policy:    " + str(cls.get_gov_min_freq()) + " - " + str(cls.get_gov_max_freq()) + " kHz")
+      hw_fmin = round(cls.get_hw_min_freq(cls.MHZ))
+      hw_fmax = round(cls.get_hw_max_freq(cls.MHZ))
+      gov_fmin = round(cls.get_gov_min_freq(cls.MHZ))
+      gov_fmax = round(cls.get_gov_max_freq(cls.MHZ))
+      print ("DVFS HW limits: " + str(hw_fmin) + " - " + str(hw_fmax) + " MHz")
+      print ("DVFS policy:    " + str(gov_fmin) + " - " + str(gov_fmax) + " MHz")
+    else:
+        print("DVFS driver not found.")
 
   @classmethod
   def get_string(cls, name):
@@ -59,28 +66,28 @@ class CpuFreqHelper(object):
     return cls.get_string("scaling_governor").strip()
 
   @classmethod
-  def get_hw_min_freq(cls):
-    return cls.get_int("cpuinfo_min_freq")
+  def get_hw_min_freq(cls, unit=KHZ):
+    return cls.get_int("cpuinfo_min_freq") / unit
 
   @classmethod
-  def get_hw_max_freq(cls):
-    return cls.get_int("cpuinfo_max_freq")
+  def get_hw_max_freq(cls, unit=KHZ):
+    return cls.get_int("cpuinfo_max_freq") / unit
 
   @classmethod
-  def get_hw_cur_freq(cls):
-    return cls.get_int("cpuinfo_cur_freq")
+  def get_hw_cur_freq(cls, unit=KHZ):
+    return cls.get_int("cpuinfo_cur_freq") / unit
 
   @classmethod
-  def get_gov_min_freq(cls):
-    return cls.get_int("scaling_min_freq")
+  def get_gov_min_freq(cls, unit=KHZ):
+    return cls.get_int("scaling_min_freq") / unit
 
   @classmethod
-  def get_gov_max_freq(cls):
-    return cls.get_int("scaling_max_freq")
+  def get_gov_max_freq(cls, unit=KHZ):
+    return cls.get_int("scaling_max_freq") / unit
 
   @classmethod
-  def get_gov_cur_freq(cls):
-    return cls.get_int("scaling_cur_freq")
+  def get_gov_cur_freq(cls, unit=KHZ):
+    return cls.get_int("scaling_cur_freq") / unit
 
 class CpuPowerHelper(object):
   @classmethod
@@ -377,6 +384,7 @@ class EcoFreq(object):
 def parse_args():
   parser = argparse.ArgumentParser()
   parser.add_argument("-c", dest="cfg_file", default=None, help="Config file name.")
+  parser.add_argument("-d", dest="diag", action="store_true", help="Show system info.")
   parser.add_argument("-t", dest="co2token", default=None, help="CO2Signal token.")
   args = parser.parse_args()
   return args
@@ -422,5 +430,6 @@ if __name__ == '__main__':
   
   diag()
 
-  ef = EcoFreq(cfg)
-  ef.spin()
+  if not args.diag:
+    ef = EcoFreq(cfg)
+    ef.spin()
