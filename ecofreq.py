@@ -362,12 +362,37 @@ class CO2History(object):
     n = int(0.01 * quantile * len(self.h)) + 1
     return heapq.nlargest(n, self.h)[n-1]
 
+class EcoLogger(object):
+  def __init__(self, config):
+    self.log_fname = LOG_FILE
+    self.row_fmt = '{0:<20}\t{1:>4}\t{2:>10}\t{3:>10}'
+
+  def print_header(self):
+    print (self.row_fmt.format("Timestamp", "CO2", "Fmax [Mhz]", "PMax [mW]"))
+
+  def print_row(self, co2):
+    ts = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    freq = power = None
+    if CpuFreqHelper.available():
+      freq = round(CpuFreqHelper.get_gov_max_freq(CpuFreqHelper.MHZ))
+    if LinuxPowercapHelper.available():
+      power = round(LinuxPowercapHelper.get_package_power_limit(0) / 1000) 
+    logstr = self.row_fmt.format(ts, co2, freq, power)
+
+#    logstr += "\t" + str(self.co2history.min_co2()) + "\t" + str(self.co2history.max_co2())
+
+    print (logstr)
+    if self.log_fname:
+      with open(self.log_fname, "a") as logf:
+        logf.write(logstr + "\n")
+
 class EcoFreq(object):
   def __init__(self, config):
     self.config = config
     self.co2provider = EmissionProvider.from_config(config)
     self.co2policy = EcoPolicy.from_config(config)
     self.co2history = CO2History(config)
+    self.co2logger = EcoLogger(config)
     self.debug = False
 
   def update_co2(self): 
@@ -378,24 +403,12 @@ class EcoFreq(object):
       self.co2history.add_co2(co2)
     else:
       co2 = "NA"
-
-    ts = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-    freq = power = None
-    if CpuFreqHelper.available():
-      freq = round(CpuFreqHelper.get_gov_max_freq(CpuFreqHelper.MHZ))
-    if LinuxPowercapHelper.available():
-      power = LinuxPowercapHelper.get_package_power_limit(0) 
-    logstr = '{0}\t{1}\t{2}\t{3}'.format(ts, co2, freq, power)
-
-    logstr += "\t" + str(self.co2history.min_co2()) + "\t" + str(self.co2history.max_co2())
-
-    print (logstr)
-    if not self.debug:
-      with open(LOG_FILE, "a") as logf:
-        logf.write(logstr + "\n")
+      
+    self.co2logger.print_row(co2)  
 
   def spin(self):
     try:
+      self.co2logger.print_header()
       while 1:
         self.update_co2()
         time.sleep(self.co2provider.interval)
