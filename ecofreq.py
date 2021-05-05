@@ -21,16 +21,24 @@ def read_int_value(fname):
   return int(read_value(fname))
 
 def write_value(fname, val):
-    with open(fname, "w") as f:
-      f.write(str(val))
+    if os.path.isfile(fname):
+      with open(fname, "w") as f:
+        f.write(str(val))
+      return True
+    else:
+      return False
 
 class CpuFreqHelper(object):
-  CPU_PATH = "/sys/devices/system/cpu/cpu0/cpufreq/"
+  SYSFS_CPU_PATH = "/sys/devices/system/cpu/cpu{0}/cpufreq/{1}"
   KHZ, MHZ, GHZ = 1, 1000, 1000000
 
   @classmethod
+  def cpu_field_fname(cls, cpu, field):
+    return cls.SYSFS_CPU_PATH.format(cpu, field)
+
+  @classmethod
   def available(cls):
-    return os.path.isfile(cls.CPU_PATH + "scaling_driver")
+    return os.path.isfile(cls.cpu_field_fname(0, "scaling_driver"))
   
   @classmethod
   def info(cls):
@@ -48,7 +56,7 @@ class CpuFreqHelper(object):
   @classmethod
   def get_string(cls, name):
     try:
-      return read_value(cls.CPU_PATH + name)
+      return read_value(cls.cpu_field_fname(0, name))
     except:
       return None 
 
@@ -88,6 +96,20 @@ class CpuFreqHelper(object):
   @classmethod
   def get_gov_cur_freq(cls, unit=KHZ):
     return cls.get_int("scaling_cur_freq") / unit
+
+  @classmethod
+  def set_cpu_field_value(cls, cpu, field, value):  
+    return write_value(cls.cpu_field_fname(cpu, field), value)
+    
+  @classmethod
+  def set_field_value(cls, field, value):  
+    cpu = 0
+    while cls.set_cpu_field_value(cpu, field, value):
+      cpu += 1
+
+  @classmethod
+  def set_gov_max_freq(cls, freq):
+    cls.set_field_value("scaling_max_freq", freq)
 
 class CpuPowerHelper(object):
   @classmethod
@@ -258,7 +280,8 @@ class FreqEcoPolicy(EcoPolicy):
 
   def set_freq(self, freq):
     if not self.debug:
-      CpuPowerHelper.set_max_freq(freq)      
+      #CpuPowerHelper.set_max_freq(freq)  
+      CpuFreqHelper.set_gov_max_freq(freq)    
 
   def set_co2(self, co2):
     self.freq = self.co2freq(co2)
@@ -359,7 +382,7 @@ class EcoFreq(object):
     ts = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     freq = power = None
     if CpuFreqHelper.available():
-      freq = CpuFreqHelper.get_gov_max_freq()
+      freq = round(CpuFreqHelper.get_gov_max_freq(CpuFreqHelper.MHZ))
     if LinuxPowercapHelper.available():
       power = LinuxPowercapHelper.get_package_power_limit(0) 
     logstr = '{0}\t{1}\t{2}\t{3}'.format(ts, co2, freq, power)
