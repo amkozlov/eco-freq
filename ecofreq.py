@@ -10,6 +10,7 @@ import configparser
 import argparse
 import random
 import heapq
+from math import ceil
 
 LOG_FILE = "/var/log/ecofreq.log"
 
@@ -246,24 +247,62 @@ class IPMIHelper(object):
 class EnergyMonitor(object):
   def __init__(self, config):
     self.interval = int(config["monitor"]["interval"])
+    self.total_energy = 0
+    self.period_energy = 0
+    self.period_samples = 0
+    self.total_samples = 0
 
   @classmethod
   def from_config(cls, config):
     sens_dict = {"rapl" : PowercapEnergyMonitor, "ipmi" : IPMIEnergyMonitor }
     p = config["monitor"].get("PowerSensor", "auto").lower()
-    if p == "auto":
+    if p == "none":
+      return NoEnergyMonitor(config)
+    elif p == "auto":
       if IPMIEnergyMonitor.available():
         return IPMIEnergyMonitor(config)
       elif PowercapEnergyMonitor.available():
         return PowercapEnergyMonitor(config)
       else:
-        raise ValueError("No power sensors found")
+        return NoEnergyMonitor(config)
     else:
       if p in sens_dict:
         return sens_dict[p](config)  
       else:
         raise ValueError("Unknown power sensor: " + p)
 
+  def update_energy(self):
+     energy = self.sample_energy()
+     self.total_energy += energy
+     self.period_energy += energy
+     self.period_samples += 1
+     self.total_samples += 1
+
+  def get_period_energy(self):
+    return self.period_energy
+
+  def get_total_energy(self):
+    return self.total_energy
+
+  def get_period_avg_power(self):
+    if self.period_samples:
+      return self.period_energy / (self.period_samples * self.interval)
+    else:
+      return 0
+
+  def get_total_avg_power(self):
+    if self.total_samples:
+      return self.total_energy / (self.total_samples * self.interval)
+    else:
+      return 0
+    
+  def reset_period(self):
+     self.period_energy = self.period_samples = 0
+
+class NoEnergyMonitor(EnergyMonitor):
+  def update_energy(self):
+    pass
+  
 class PowercapEnergyMonitor(EnergyMonitor):
   UJOULE, JOULE, WH = 1, 1e6, 3600*1e6
   
@@ -289,9 +328,9 @@ class PowercapEnergyMonitor(EnergyMonitor):
     for p in self.pkg_list:
       self.last_energy[p] = 0
       self.energy_range[p] = LinuxPowercapHelper.get_package_energy_range(p)
-    self.update_energy()
+    self.sample_energy()
 
-  def update_energy(self, unit=JOULE):
+  def sample_energy(self):
     energy_diff = 0
     for p in self.pkg_list:
       new_energy = LinuxPowercapHelper.get_package_energy(p)
@@ -301,7 +340,8 @@ class PowercapEnergyMonitor(EnergyMonitor):
         diff_uj = new_energy + (self.energy_range[p] - self.last_energy[p]);
       self.last_energy[p] = new_energy
       energy_diff += diff_uj
-    return energy_diff / unit
+    energy_diff_j = energy_diff / self.JOULE  
+    return energy_diff_j
 
 class IPMIEnergyMonitor(EnergyMonitor):
   def __init__(self, config):
@@ -312,10 +352,11 @@ class IPMIEnergyMonitor(EnergyMonitor):
   def available(cls):
     return IPMIHelper.available()
 
-  def update_energy(self):
-    pwr = IPMIHelper.get_power()
-    energy_diff = 0.5 * (self.last_pwr + pwr) * self.interval
-    self.last_pwr = pwr
+  def sample_energy(self):
+    cur_pwr = IPMIHelper.get_power()
+    avg_pwr = 0.5 * (self.last_pwr + cur_pwr)
+    energy_diff = avg_pwr * self.interval
+    self.last_pwr = cur_pwr
     return energy_diff
 
 class EmissionProvider(object):
@@ -541,6 +582,10 @@ class EcoFreq(object):
     self.co2logger = EcoLogger(config)
     self.energymon = EnergyMonitor.from_config(config)
     self.debug = False
+    # make sure that CO2 sampling interval is a multiple of energy sampling interval
+    int_ratio = ceil(self.co2provider.interval / self.energymon.interval)
+    self.sample_interval = self.energymon.interval = round(self.co2provider.interval / int_ratio)
+    # print("sampling intervals co2/energy:", self.co2provider.interval, self.energymon.interval)
 
   def update_co2(self): 
     co2 = self.co2provider.get_co2()
@@ -548,20 +593,23 @@ class EcoFreq(object):
     if co2:
       self.co2policy.set_co2(co2)
       self.co2history.add_co2(co2)
-    else:
-      co2 = "NA"
-      
-    energy = self.energymon.update_energy()
-    avg_power = energy / self.co2provider.interval
-
-    self.co2logger.print_row(co2, energy, avg_power)  
+  
+    self.last_co2 = co2
 
   def spin(self):
     try:
       self.co2logger.print_header()
+      duration = 0
+      self.energymon.reset_period() 
       while 1:
-        self.update_co2()
-        time.sleep(self.co2provider.interval)
+        if duration % self.energymon.interval == 0:
+          self.energymon.update_energy()
+        if duration % self.co2provider.interval == 0:
+          self.update_co2()
+          self.co2logger.print_row(self.last_co2, self.energymon.get_period_energy(), self.energymon.get_period_avg_power()) 
+          self.energymon.reset_period() 
+        time.sleep(self.sample_interval)
+        duration += self.sample_interval
     except:
       e = sys.exc_info()
       print ("Exception: ", e)
@@ -584,7 +632,7 @@ def read_config(args):
                              'Type'        : 'Linear', 
                              'CO2Range'    : 'auto'    },        
               'monitor'  : { 'PowerSensor' : 'auto',    
-                             'Interval'    : '10'       }        
+                             'Interval'    : '5'       }        
              }
 
   homedir = os.path.dirname(os.path.abspath(__file__))
