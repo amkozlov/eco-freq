@@ -507,7 +507,9 @@ class CO2History(object):
 
 class EcoLogger(object):
   def __init__(self, config):
-    self.log_fname = LOG_FILE
+    self.log_fname = config["general"]["logfile"]
+    if self.log_fname in ["none", "off"]:
+      self.log_fname = None
     self.row_fmt = '{0:<20}\t{1:>10}\t{2:>10}\t{3:>10.3f}\t{4:>10.3f}\t{5:>10.3f}'
     self.header_fmt = self.row_fmt.replace(".3f", "")
 
@@ -569,12 +571,14 @@ def parse_args():
   parser = argparse.ArgumentParser()
   parser.add_argument("-c", dest="cfg_file", default=None, help="Config file name.")
   parser.add_argument("-d", dest="diag", action="store_true", help="Show system info.")
+  parser.add_argument("-l", dest="log_fname", default=None, help="Log file name.")
   parser.add_argument("-t", dest="co2token", default=None, help="CO2Signal token.")
   args = parser.parse_args()
   return args
 
 def read_config(args):
-  def_dict = {'emission' : { 'Provider'    : 'co2signal',
+  def_dict = {'general' :  { 'LogFile'    : LOG_FILE    },
+              'emission' : { 'Provider'    : 'co2signal',
                              'Interval'    : '600'     },
               'policy'   : { 'Control'     : 'auto',    
                              'Type'        : 'Linear', 
@@ -600,6 +604,8 @@ def read_config(args):
   if args:
      if args.co2token:
        parser["co2signal"]["token"] = args.co2token
+     if args.log_fname:
+       parser["general"]["LogFile"] = args.log_fname
 
   return parser
 
