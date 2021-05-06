@@ -551,20 +551,20 @@ class EcoLogger(object):
     self.log_fname = config["general"]["logfile"]
     if self.log_fname in ["none", "off"]:
       self.log_fname = None
-    self.row_fmt = '{0:<20}\t{1:>10}\t{2:>10}\t{3:>10.3f}\t{4:>10.3f}\t{5:>10.3f}'
+    self.row_fmt = '{0:<20}\t{1:>10}\t{2:>10}\t{3:>10.3f}\t{4:>10.3f}\t{5:>10.3f}\t{6:>10.3f}'
     self.header_fmt = self.row_fmt.replace(".3f", "")
 
   def print_header(self):
-    print (self.header_fmt.format("Timestamp", "gCO2/kWh", "Fmax [Mhz]", "Pmax [W]", "Pavg [W]", "Energy [J]"))
+    print (self.header_fmt.format("Timestamp", "gCO2/kWh", "Fmax [Mhz]", "Pmax [W]", "Pavg [W]", "Energy [J]", "CO2 [g]"))
 
-  def print_row(self, co2, energy, avg_power):
+  def print_row(self, co2kwh, energy, avg_power, co2period):
     ts = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     freq = power = None
     if CpuFreqHelper.available():
       freq = round(CpuFreqHelper.get_gov_max_freq(CpuFreqHelper.MHZ))
     if LinuxPowercapHelper.available():
       max_power = LinuxPowercapHelper.get_package_power_limit(0, LinuxPowercapHelper.WATT)
-    logstr = self.row_fmt.format(ts, co2, freq, max_power, avg_power, energy)
+    logstr = self.row_fmt.format(ts, co2kwh, freq, max_power, avg_power, energy, co2period)
 
 #    logstr += "\t" + str(self.co2history.min_co2()) + "\t" + str(self.co2history.max_co2())
 
@@ -586,6 +586,7 @@ class EcoFreq(object):
     int_ratio = ceil(self.co2provider.interval / self.energymon.interval)
     self.sample_interval = self.energymon.interval = round(self.co2provider.interval / int_ratio)
     # print("sampling intervals co2/energy:", self.co2provider.interval, self.energymon.interval)
+    self.last_co2kwh = 0
 
   def update_co2(self): 
     co2 = self.co2provider.get_co2()
@@ -594,7 +595,8 @@ class EcoFreq(object):
       self.co2policy.set_co2(co2)
       self.co2history.add_co2(co2)
   
-    self.last_co2 = co2
+    self.period_co2kwh = 0.5 * (co2 + self.last_co2kwh)
+    self.last_co2kwh = co2
 
   def spin(self):
     try:
@@ -606,7 +608,10 @@ class EcoFreq(object):
           self.energymon.update_energy()
         if duration % self.co2provider.interval == 0:
           self.update_co2()
-          self.co2logger.print_row(self.last_co2, self.energymon.get_period_energy(), self.energymon.get_period_avg_power()) 
+          energy = self.energymon.get_period_energy()
+          avg_power = self.energymon.get_period_avg_power()
+          period_co2 = energy * self.period_co2kwh / 3.6e6
+          self.co2logger.print_row(self.last_co2kwh, energy, avg_power, period_co2) 
           self.energymon.reset_period() 
         time.sleep(self.sample_interval)
         duration += self.sample_interval
