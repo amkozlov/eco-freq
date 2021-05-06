@@ -175,6 +175,14 @@ class LinuxPowercapHelper(object):
     return read_int_value(cls.package_file(pkg, "constraint_0_power_limit_uw")) 
 
   @classmethod
+  def get_package_energy(cls, pkg):
+    return read_int_value(cls.package_file(pkg, "energy_uj")) 
+
+  @classmethod
+  def get_package_energy_range(cls, pkg):
+    return read_int_value(cls.package_file(pkg, "max_energy_range_uj")) 
+
+  @classmethod
   def set_package_power_limit(cls, pkg, power_uw):
     write_value(cls.package_file(pkg, "constraint_0_power_limit_uw"), power_uw)
 
@@ -186,6 +194,76 @@ class LinuxPowercapHelper(object):
   def set_power_limit(cls, power_uw):
     for pkg in cls.package_list(): 
       cls.set_package_power_limit(pkg, power_uw)
+      
+class EnergyMonitor(object):
+  def __init__(self, config):
+    self.interval = int(config["monitor"]["interval"])
+
+  @classmethod
+  def from_config(cls, config):
+    sens_dict = {"rapl" : PowercapEnergyMonitor, "ipmi" : IPMIEnergyMonitor }
+    p = config["monitor"].get("PowerSensor", "auto").lower()
+    if p == "auto":
+      if IPMIEnergyMonitor.available():
+        return IPMIEnergyMonitor(config)
+      elif PowercapEnergyMonitor.available():
+        return PowercapEnergyMonitor(config)
+      else:
+        raise ValueError("No power sensors found")
+    else:
+      if p in sens_dict:
+        return sens_dict[p](config)  
+      else:
+        raise ValueError("Unknown power sensor: " + p)
+
+class PowercapEnergyMonitor(EnergyMonitor):
+  UJOULE, JOULE, WH = 1, 1e6, 3600*1e6
+  
+  @classmethod
+  def available(cls):
+    try:
+      energy = LinuxPowercapHelper.get_package_energy(0)
+      return energy > 0
+    except OSError:
+      return False
+     
+  def __init__(self, config):
+    EnergyMonitor.__init__(self, config)
+    self.pkg_list = LinuxPowercapHelper.package_list("psys")
+    if self.pkg_list:
+      self.psys_domain = True
+    else:
+      self.psys_domain = False
+      self.pkg_list = LinuxPowercapHelper.package_list("package-")
+      self.pkg_list += LinuxPowercapHelper.package_list("dram")
+    self.last_energy = {}
+    self.energy_range = {}
+    for p in self.pkg_list:
+      self.last_energy[p] = 0
+      self.energy_range[p] = LinuxPowercapHelper.get_package_energy_range(p)
+    self.update_energy()
+
+  def update_energy(self, unit=UJOULE):
+    energy_diff = 0
+    for p in self.pkg_list:
+      new_energy = LinuxPowercapHelper.get_package_energy(p)
+      if new_energy >= self.last_energy[p]:
+        diff_uj = new_energy - self.last_energy[p]
+      else:
+        diff_uj = new_energy + (self.energy_range[p] - self.last_energy[p]);
+      self.last_energy[p] = new_energy
+      energy_diff += diff_uj
+    return energy_diff / unit
+
+class IPMIEnergyMonitor(EnergyMonitor):
+
+  @classmethod
+  def available(cls):
+    return False
+
+  def update_energy(self):
+    print ("Not implemented!")
+    return None
 
 class EmissionProvider(object):
   def __init__(self, config):
@@ -365,19 +443,20 @@ class CO2History(object):
 class EcoLogger(object):
   def __init__(self, config):
     self.log_fname = LOG_FILE
-    self.row_fmt = '{0:<20}\t{1:>4}\t{2:>10}\t{3:>10}'
+    self.row_fmt = '{0:<20}\t{1:>10}\t{2:>10}\t{3:>10.3f}\t{4:>10.3f}\t{5:>10.3f}'
+    self.header_fmt = self.row_fmt.replace(".3f", "")
 
   def print_header(self):
-    print (self.row_fmt.format("Timestamp", "CO2", "Fmax [Mhz]", "PMax [mW]"))
+    print (self.header_fmt.format("Timestamp", "gCO2/kWh", "Fmax [Mhz]", "Pmax [W]", "Pavg [W]", "Energy [J]"))
 
-  def print_row(self, co2):
+  def print_row(self, co2, energy, avg_power):
     ts = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     freq = power = None
     if CpuFreqHelper.available():
       freq = round(CpuFreqHelper.get_gov_max_freq(CpuFreqHelper.MHZ))
     if LinuxPowercapHelper.available():
-      power = round(LinuxPowercapHelper.get_package_power_limit(0) / 1000) 
-    logstr = self.row_fmt.format(ts, co2, freq, power)
+      max_power = LinuxPowercapHelper.get_package_power_limit(0) / 1e6 
+    logstr = self.row_fmt.format(ts, co2, freq, max_power, avg_power, energy)
 
 #    logstr += "\t" + str(self.co2history.min_co2()) + "\t" + str(self.co2history.max_co2())
 
@@ -393,6 +472,7 @@ class EcoFreq(object):
     self.co2policy = EcoPolicy.from_config(config)
     self.co2history = CO2History(config)
     self.co2logger = EcoLogger(config)
+    self.energymon = EnergyMonitor.from_config(config)
     self.debug = False
 
   def update_co2(self): 
@@ -404,7 +484,10 @@ class EcoFreq(object):
     else:
       co2 = "NA"
       
-    self.co2logger.print_row(co2)  
+    energy = self.energymon.update_energy(PowercapEnergyMonitor.JOULE)
+    avg_power = energy / self.co2provider.interval
+
+    self.co2logger.print_row(co2, energy, avg_power)  
 
   def spin(self):
     try:
@@ -426,11 +509,13 @@ def parse_args():
   return args
 
 def read_config(args):
-  def_dict = {'emission' : { 'Provider' : 'co2signal',
-                             'Interval' : '600'     },
-              'policy'   : { 'Control'  : 'auto',    
-                             'Type'     : 'Linear', 
-                             'CO2Range' : 'auto'    }        
+  def_dict = {'emission' : { 'Provider'    : 'co2signal',
+                             'Interval'    : '600'     },
+              'policy'   : { 'Control'     : 'auto',    
+                             'Type'        : 'Linear', 
+                             'CO2Range'    : 'auto'    },        
+              'monitor'  : { 'PowerSensor' : 'auto',    
+                             'Interval'    : '5'       }        
              }
 
   homedir = os.path.dirname(os.path.abspath(__file__))
