@@ -2,7 +2,7 @@
 
 import sys, json 
 import urllib.request
-from subprocess import call,STDOUT
+from subprocess import call,check_output,STDOUT
 import datetime
 import time
 import os
@@ -216,7 +216,33 @@ class LinuxPowercapHelper(object):
   def set_power_limit(cls, power, unit=UWATT):
     for pkg in cls.package_list(): 
       cls.set_package_power_limit(pkg, power, unit)
+
+class IPMIHelper(object):
+  @classmethod
+  def available(cls):
+    return cls.get_power() is not None
+
+  @classmethod
+  def info(cls):
+    print("IPMI available: ", end ="")
+    if cls.available():
+      print("YES")
+    else:
+      print("NO")
       
+  @classmethod
+  def get_power(cls):
+    try:
+      out = check_output("ipmitool dcmi power reading", shell=True)
+      for line in out.decode().split("\n"):
+        tok = [x.strip() for x in line.split(":")]
+        if tok[0] == "Instantaneous power reading":
+          pwr = tok[1].split()[0]
+          return float(pwr)
+      return None
+    except OSError:
+      return None
+
 class EnergyMonitor(object):
   def __init__(self, config):
     self.interval = int(config["monitor"]["interval"])
@@ -265,7 +291,7 @@ class PowercapEnergyMonitor(EnergyMonitor):
       self.energy_range[p] = LinuxPowercapHelper.get_package_energy_range(p)
     self.update_energy()
 
-  def update_energy(self, unit=UJOULE):
+  def update_energy(self, unit=JOULE):
     energy_diff = 0
     for p in self.pkg_list:
       new_energy = LinuxPowercapHelper.get_package_energy(p)
@@ -278,14 +304,19 @@ class PowercapEnergyMonitor(EnergyMonitor):
     return energy_diff / unit
 
 class IPMIEnergyMonitor(EnergyMonitor):
+  def __init__(self, config):
+    EnergyMonitor.__init__(self, config)
+    self.last_pwr = 0
 
   @classmethod
   def available(cls):
-    return False
+    return IPMIHelper.available()
 
   def update_energy(self):
-    print ("Not implemented!")
-    return None
+    pwr = IPMIHelper.get_power()
+    energy_diff = 0.5 * (self.last_pwr + pwr) * self.interval
+    self.last_pwr = pwr
+    return energy_diff
 
 class EmissionProvider(object):
   def __init__(self, config):
@@ -506,7 +537,7 @@ class EcoFreq(object):
     else:
       co2 = "NA"
       
-    energy = self.energymon.update_energy(PowercapEnergyMonitor.JOULE)
+    energy = self.energymon.update_energy()
     avg_power = energy / self.co2provider.interval
 
     self.co2logger.print_row(co2, energy, avg_power)  
@@ -537,7 +568,7 @@ def read_config(args):
                              'Type'        : 'Linear', 
                              'CO2Range'    : 'auto'    },        
               'monitor'  : { 'PowerSensor' : 'auto',    
-                             'Interval'    : '5'       }        
+                             'Interval'    : '10'       }        
              }
 
   homedir = os.path.dirname(os.path.abspath(__file__))
@@ -564,6 +595,8 @@ def diag():
   LinuxPowercapHelper.info()
   print("")
   CpuFreqHelper.info()
+  print("")
+  IPMIHelper.info()
   print("")
 
 if __name__ == '__main__':
