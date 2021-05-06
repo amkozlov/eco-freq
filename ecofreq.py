@@ -235,7 +235,7 @@ class IPMIHelper(object):
   def get_power(cls):
     try:
       out = check_output("ipmitool dcmi power reading", shell=True, stderr=DEVNULL, universal_newlines=True)
-      for line in out.decode().split("\n"):
+      for line in out.split("\n"):
         tok = [x.strip() for x in line.split(":")]
         if tok[0] == "Instantaneous power reading":
           pwr = tok[1].split()[0]
