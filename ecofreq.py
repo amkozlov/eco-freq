@@ -2,7 +2,7 @@
 
 import sys, json 
 import urllib.request
-from subprocess import call,check_output,STDOUT
+from subprocess import call,check_output,STDOUT,DEVNULL,CalledProcessError
 import datetime
 import time
 import os
@@ -233,14 +233,14 @@ class IPMIHelper(object):
   @classmethod
   def get_power(cls):
     try:
-      out = check_output("ipmitool dcmi power reading", shell=True)
+      out = check_output("ipmitool dcmi power reading", shell=True, stderr=DEVNULL, universal_newlines=True)
       for line in out.decode().split("\n"):
         tok = [x.strip() for x in line.split(":")]
         if tok[0] == "Instantaneous power reading":
           pwr = tok[1].split()[0]
           return float(pwr)
       return None
-    except OSError:
+    except CalledProcessError:
       return None
 
 class EnergyMonitor(object):
@@ -393,8 +393,20 @@ class EcoPolicy(object):
       return LinearPowerEcoPolicy(config)
     elif c == "frequency" and t == "linear":
       return LinearFreqEcoPolicy(config)
+    elif c in ["none", "off"]:
+      return NoEcoPolicy(config)
     else:
       raise ValueError("Unknown policy: " + [c, t])
+
+class NoEcoPolicy(EcoPolicy):
+  def __init__(self, config):
+    EcoPolicy.__init__(self, config)
+
+  def set_co2(self, co2):
+    pass
+    
+  def reset(self):
+    pass
 
 class FreqEcoPolicy(EcoPolicy):
   def __init__(self, config):
