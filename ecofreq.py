@@ -30,7 +30,7 @@ def write_value(fname, val):
 
 class CpuFreqHelper(object):
   SYSFS_CPU_PATH = "/sys/devices/system/cpu/cpu{0}/cpufreq/{1}"
-  KHZ, MHZ, GHZ = 1, 1000, 1000000
+  KHZ, MHZ, GHZ = 1, 1e3, 1e6
 
   @classmethod
   def cpu_field_fname(cls, cpu, field):
@@ -119,6 +119,7 @@ class CpuPowerHelper(object):
 class LinuxPowercapHelper(object):
   INTEL_RAPL_PATH="/sys/class/powercap/intel-rapl:"
   PKG_MAX=256
+  UWATT, MWATT, WATT = 1, 1e3, 1e6
 
   @classmethod
   def package_path(cls, pkg):
@@ -138,7 +139,18 @@ class LinuxPowercapHelper(object):
         break;
       pkg_name = read_value(fname)  
       if pkg_name.startswith(domain):
-        l += [pkg]
+        l += [str(pkg)]
+      if domain in ["dram", "core", "uncore"]:
+        subpkg = 0
+        while subpkg < cls.PKG_MAX:
+          subpkg_code = str(pkg) + ":" + str(subpkg) 
+          fname = cls.package_file(subpkg_code, "name")
+          if not os.path.isfile(fname):
+            break;
+          pkg_name = read_value(fname)  
+          if pkg_name.startswith(domain):
+            l += [subpkg_code]
+          subpkg += 1
       pkg += 1
     return l
 
@@ -149,30 +161,38 @@ class LinuxPowercapHelper(object):
   @classmethod
   def info(cls):
     if cls.available():
-        cpus = cls.package_list()
         outfmt = "RAPL {0} domains: count = {1}, hw_limit = {2} W, current_limit = {3} W" 
+        cpus = cls.package_list()
         if len(cpus):
-          maxp = cls.get_package_hw_max_power(cpus[0]) / 1000000.
-          curp = cls.get_package_power_limit(cpus[0]) / 1000000.
+          maxp = cls.get_package_hw_max_power(cpus[0], cls.WATT)
+          curp = cls.get_package_power_limit(cpus[0], cls.WATT)
           print(outfmt.format("CPU ", len(cpus), maxp, curp))
+        dram = cls.package_list("dram")
+        if len(dram):
+          try:
+            maxp = cls.get_package_hw_max_power(dram[0], cls.WATT)
+          except OSError:
+            maxp = None
+          curp = cls.get_package_power_limit(dram[0], cls.WATT)
+          print(outfmt.format("DRAM", len(dram), maxp, curp))
         psys = cls.package_list("psys")
         if len(psys):
           try:
-            maxp = cls.get_package_hw_max_power(psys[0]) / 1000000.
+            maxp = cls.get_package_hw_max_power(psys[0], cls.WATT)
           except OSError:
             maxp = None
-          curp = cls.get_package_power_limit(psys[0]) / 1000000.
+          curp = cls.get_package_power_limit(psys[0], cls.WATT)
           print(outfmt.format("PSYS", len(psys), maxp, curp))
     else:
         print("RAPL powercap not found.")
 
   @classmethod
-  def get_package_hw_max_power(cls, pkg):
-    return read_int_value(cls.package_file(pkg, "constraint_0_max_power_uw"))  
+  def get_package_hw_max_power(cls, pkg, unit=UWATT):
+    return read_int_value(cls.package_file(pkg, "constraint_0_max_power_uw")) / unit 
 
   @classmethod
-  def get_package_power_limit(cls, pkg):
-    return read_int_value(cls.package_file(pkg, "constraint_0_power_limit_uw")) 
+  def get_package_power_limit(cls, pkg, unit=UWATT):
+    return read_int_value(cls.package_file(pkg, "constraint_0_power_limit_uw")) / unit 
 
   @classmethod
   def get_package_energy(cls, pkg):
@@ -183,17 +203,19 @@ class LinuxPowercapHelper(object):
     return read_int_value(cls.package_file(pkg, "max_energy_range_uj")) 
 
   @classmethod
-  def set_package_power_limit(cls, pkg, power_uw):
-    write_value(cls.package_file(pkg, "constraint_0_power_limit_uw"), power_uw)
+  def set_package_power_limit(cls, pkg, power, unit=UWATT):
+    val = round(power * unit)
+    write_value(cls.package_file(pkg, "constraint_0_power_limit_uw"), val)
 
   @classmethod
   def reset_package_power_limit(cls, pkg):
-    write_value(cls.package_file(pkg, "constraint_0_power_limit_uw"), cls.get_package_hw_max_power(pkg))
+    # write_value(cls.package_file(pkg, "constraint_0_power_limit_uw"), round(cls.get_package_hw_max_power(pkg)))
+    cls.set_package_power_limit(pkg, cls.get_package_hw_max_power(pkg))
 
   @classmethod
-  def set_power_limit(cls, power_uw):
+  def set_power_limit(cls, power, unit=UWATT):
     for pkg in cls.package_list(): 
-      cls.set_package_power_limit(pkg, power_uw)
+      cls.set_package_power_limit(pkg, power, unit)
       
 class EnergyMonitor(object):
   def __init__(self, config):
@@ -455,7 +477,7 @@ class EcoLogger(object):
     if CpuFreqHelper.available():
       freq = round(CpuFreqHelper.get_gov_max_freq(CpuFreqHelper.MHZ))
     if LinuxPowercapHelper.available():
-      max_power = LinuxPowercapHelper.get_package_power_limit(0) / 1e6 
+      max_power = LinuxPowercapHelper.get_package_power_limit(0, LinuxPowercapHelper.WATT)
     logstr = self.row_fmt.format(ts, co2, freq, max_power, avg_power, energy)
 
 #    logstr += "\t" + str(self.co2history.min_co2()) + "\t" + str(self.co2history.max_co2())
