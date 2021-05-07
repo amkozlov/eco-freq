@@ -10,6 +10,7 @@ import configparser
 import argparse
 import random
 import heapq
+import string
 from math import ceil
 
 LOG_FILE = "/var/log/ecofreq.log"
@@ -28,6 +29,16 @@ def write_value(fname, val):
       return True
     else:
       return False
+    
+class NAFormatter(string.Formatter):
+    def __init__(self, missing='NA'):
+        self.missing = missing
+
+    def format_field(self, value, spec):
+        if value == None: 
+          value = self.missing
+          spec = spec.replace("f", "s")
+        return super(NAFormatter, self).format_field(value, spec)
 
 class CpuInfoHelper(object):
   CMD_LSCPU = "lscpu"
@@ -438,7 +449,10 @@ class MockCO2Provider(object):
     self.co2min, self.co2max = [int(x) for x in r.split("-")]
 
   def get_co2(self):
-    return random.randint(self.co2min, self.co2max)
+    co2 = random.randint(self.co2min, self.co2max)
+    # if co2 % 2 == 0:
+    #   co2 = None
+    return co2
 
 class EcoPolicy(object):
   def __init__(self, config):
@@ -543,6 +557,7 @@ class PowerEcoPolicy(EcoPolicy):
 
   def set_co2(self, co2):
     self.power = self.co2power(co2)
+#    print("Update policy co2 -> power: ", co2, "->", self.power)
     self.set_power(self.power)
 
   def reset(self):
@@ -586,9 +601,10 @@ class EcoLogger(object):
       self.log_fname = None
     self.row_fmt = '{0:<20}\t{1:>10}\t{2:>10}\t{3:>10.3f}\t{4:>10.3f}\t{5:>10.3f}\t{6:>10.3f}'
     self.header_fmt = self.row_fmt.replace(".3f", "")
+    self.fmt = NAFormatter()
 
   def print_header(self):
-    print (self.header_fmt.format("Timestamp", "gCO2/kWh", "Fmax [Mhz]", "Pmax [W]", "Pavg [W]", "Energy [J]", "CO2 [g]"))
+    print (self.fmt.format(self.header_fmt, "Timestamp", "gCO2/kWh", "Fmax [Mhz]", "Pmax [W]", "Pavg [W]", "Energy [J]", "CO2 [g]"))
 
   def print_row(self, co2kwh, energy, avg_power, co2period):
     ts = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
@@ -597,7 +613,7 @@ class EcoLogger(object):
       freq = round(CpuFreqHelper.get_gov_max_freq(CpuFreqHelper.MHZ))
     if LinuxPowercapHelper.available():
       max_power = LinuxPowercapHelper.get_package_power_limit(0, LinuxPowercapHelper.WATT)
-    logstr = self.row_fmt.format(ts, co2kwh, freq, max_power, avg_power, energy, co2period)
+    logstr = self.fmt.format(self.row_fmt, ts, co2kwh, freq, max_power, avg_power, energy, co2period)
 
 #    logstr += "\t" + str(self.co2history.min_co2()) + "\t" + str(self.co2history.max_co2())
 
@@ -619,16 +635,33 @@ class EcoFreq(object):
     int_ratio = ceil(self.co2provider.interval / self.energymon.interval)
     self.sample_interval = self.energymon.interval = round(self.co2provider.interval / int_ratio)
     # print("sampling intervals co2/energy:", self.co2provider.interval, self.energymon.interval)
-    self.last_co2kwh = 0
+    self.last_co2kwh = None
 
-  def update_co2(self): 
+  def update_co2(self):
+    # fetch new co2 intensity 
     co2 = self.co2provider.get_co2()
+    if co2:
+      if self.last_co2kwh:
+        self.period_co2kwh = round(0.5 * (co2 + self.last_co2kwh))
+      else:
+        self.period_co2kwh = co2
+    else:
+      self.period_co2kwh = self.last_co2kwh
 
+    # prepare and print log row -> shows values for *past* interval!
+    energy = self.energymon.get_period_energy()
+    avg_power = self.energymon.get_period_avg_power()
+    if self.period_co2kwh:
+      period_co2 = energy * self.period_co2kwh / 3.6e6
+    else:
+      period_co2 = None
+    self.co2logger.print_row(self.period_co2kwh, energy, avg_power, period_co2) 
+
+    # apply policy for new co2 reading
     if co2:
       self.co2policy.set_co2(co2)
       self.co2history.add_co2(co2)
-  
-    self.period_co2kwh = 0.5 * (co2 + self.last_co2kwh)
+        
     self.last_co2kwh = co2
 
   def spin(self):
@@ -637,17 +670,13 @@ class EcoFreq(object):
       duration = 0
       self.energymon.reset_period() 
       while 1:
+        time.sleep(self.sample_interval)
+        duration += self.sample_interval
         if duration % self.energymon.interval == 0:
           self.energymon.update_energy()
         if duration % self.co2provider.interval == 0:
           self.update_co2()
-          energy = self.energymon.get_period_energy()
-          avg_power = self.energymon.get_period_avg_power()
-          period_co2 = energy * self.period_co2kwh / 3.6e6
-          self.co2logger.print_row(self.last_co2kwh, energy, avg_power, period_co2) 
           self.energymon.reset_period() 
-        time.sleep(self.sample_interval)
-        duration += self.sample_interval
     except:
       e = sys.exc_info()
       print ("Exception: ", e)
