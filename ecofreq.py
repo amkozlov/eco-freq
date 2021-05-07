@@ -29,6 +29,39 @@ def write_value(fname, val):
     else:
       return False
 
+class CpuInfoHelper(object):
+  CMD_LSCPU = "lscpu"
+  
+  @classmethod
+  def available(cls):
+    return call(cls.CMD_LSCPU, shell=True, stderr=DEVNULL) == 0
+
+  @classmethod
+  def parse_lscpu(cls):
+    try:
+      out = check_output(cls.CMD_LSCPU, shell=True, stderr=DEVNULL, universal_newlines=True)
+      cpuinfo = {}
+      for line in out.split("\n"):
+        tok = line.split(":")
+        if len(tok) > 1:
+          cpuinfo[tok[0]] = tok[1].strip()
+      return cpuinfo
+    except CalledProcessError:
+      return None  
+
+  @classmethod
+  def info(cls):
+    cpuinfo = cls.parse_lscpu()
+    if cpuinfo:
+      model = cpuinfo["Model name"]
+      sockets = int(cpuinfo["Socket(s)"])
+      threads = int(cpuinfo["CPU(s)"])
+      cores = int(threads / int(cpuinfo["Thread(s) per core"]))
+      print("CPU model:                ", model) 
+      print("CPU sockets/cores/threads:", sockets, "/", cores, "/", threads) 
+    else:
+      print("CPU info not available")
+  
 class CpuFreqHelper(object):
   SYSFS_CPU_PATH = "/sys/devices/system/cpu/cpu{0}/cpufreq/{1}"
   KHZ, MHZ, GHZ = 1, 1e3, 1e6
@@ -663,6 +696,9 @@ def read_config(args):
   return parser
 
 def diag():
+  print("EcoFreq v0.0.1\n")
+  CpuInfoHelper.info()
+  print("")
   LinuxPowercapHelper.info()
   print("")
   CpuFreqHelper.info()

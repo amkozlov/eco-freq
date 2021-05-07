@@ -1,5 +1,5 @@
 [Unit]
-Description=Adjust CPU frequency according to CO2-intesity of the energy mix
+Description=Adjust CPU frequency according to CO2-intensity of the energy mix
 
 [Service]
 Type=simple
