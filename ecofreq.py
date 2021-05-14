@@ -668,6 +668,11 @@ class EcoFreq(object):
     self.sample_interval = self.energymon.interval = round(self.co2provider.interval / int_ratio)
     # print("sampling intervals co2/energy:", self.co2provider.interval, self.energymon.interval)
     self.last_co2kwh = None
+    
+  def info(self):
+    print("CO2 Provider:", type(self.co2provider).__name__, "(interval =", self.co2provider.interval, "sec)")
+    print("CO2 Policy:  ", type(self.co2policy).__name__)
+    print("Monitors:    ", type(self.energymon).__name__, "(interval =", self.energymon.interval, "sec)")
 
   def update_co2(self):
     # fetch new co2 intensity 
@@ -772,9 +777,11 @@ if __name__ == '__main__':
 
   args = parse_args()
   cfg = read_config(args)
-  
+
   diag()
 
   if not args.diag:
     ef = EcoFreq(cfg)
+    ef.info()
+    print("")
     ef.spin()
