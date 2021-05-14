@@ -89,26 +89,34 @@ class CpuFreqHelper(object):
   def info(cls):
     if cls.available():
       print ("DVFS settings:  driver = " + cls.get_driver() + ", governor = " + cls.get_governor())
-      hw_fmin = round(cls.get_hw_min_freq(cls.MHZ))
-      hw_fmax = round(cls.get_hw_max_freq(cls.MHZ))
-      gov_fmin = round(cls.get_gov_min_freq(cls.MHZ))
-      gov_fmax = round(cls.get_gov_max_freq(cls.MHZ))
+      hw_fmin = round(cls.get_hw_min_freq(0, cls.MHZ))
+      hw_fmax = round(cls.get_hw_max_freq(0, cls.MHZ))
+      gov_fmin = round(cls.get_gov_min_freq(0, cls.MHZ))
+      gov_fmax = round(cls.get_gov_max_freq(0, cls.MHZ))
       print ("DVFS HW limits: " + str(hw_fmin) + " - " + str(hw_fmax) + " MHz")
       print ("DVFS policy:    " + str(gov_fmin) + " - " + str(gov_fmax) + " MHz")
     else:
         print("DVFS driver not found.")
 
   @classmethod
-  def get_string(cls, name):
+  def get_string(cls, name, cpu=0):
     try:
-      return read_value(cls.cpu_field_fname(0, name))
+      return read_value(cls.cpu_field_fname(cpu, name))
     except:
       return None 
 
   @classmethod
-  def get_int(cls, name):
-    s = cls.get_string(name)
+  def get_int(cls, name, cpu=0):
+    s = cls.get_string(name, cpu)
     return None if s is None else int(s)
+
+  @classmethod
+  def get_int_scaled(cls, name, cpu=0, unit=KHZ):
+    s = cls.get_string(name, cpu)
+    if s:
+      return int(s) / unit
+    else:
+      return None
 
   @classmethod
   def get_driver(cls):
@@ -119,28 +127,41 @@ class CpuFreqHelper(object):
     return cls.get_string("scaling_governor").strip()
 
   @classmethod
-  def get_hw_min_freq(cls, unit=KHZ):
-    return cls.get_int("cpuinfo_min_freq") / unit
+  def get_hw_min_freq(cls, cpu=0, unit=KHZ):
+    return cls.get_int_scaled("cpuinfo_min_freq", cpu, unit)
 
   @classmethod
-  def get_hw_max_freq(cls, unit=KHZ):
-    return cls.get_int("cpuinfo_max_freq") / unit
+  def get_hw_max_freq(cls, cpu=0, unit=KHZ):
+    return cls.get_int_scaled("cpuinfo_max_freq", cpu, unit)
 
   @classmethod
-  def get_hw_cur_freq(cls, unit=KHZ):
-    return cls.get_int("cpuinfo_cur_freq") / unit
+  def get_hw_cur_freq(cls, cpu=0, unit=KHZ):
+    return cls.get_int_scaled("cpuinfo_cur_freq", cpu, unit)
+  
+  @classmethod
+  def get_gov_min_freq(cls, cpu=0, unit=KHZ):
+    return cls.get_int_scaled("scaling_min_freq", cpu, unit)
 
   @classmethod
-  def get_gov_min_freq(cls, unit=KHZ):
-    return cls.get_int("scaling_min_freq") / unit
+  def get_gov_max_freq(cls, cpu=0, unit=KHZ):
+    return cls.get_int_scaled("scaling_max_freq", cpu, unit)
 
   @classmethod
-  def get_gov_max_freq(cls, unit=KHZ):
-    return cls.get_int("scaling_max_freq") / unit
+  def get_gov_cur_freq(cls, cpu=0, unit=KHZ):
+    return cls.get_int_scaled("scaling_cur_freq", cpu, unit)
 
   @classmethod
-  def get_gov_cur_freq(cls, unit=KHZ):
-    return cls.get_int("scaling_cur_freq") / unit
+  def get_avg_gov_cur_freq(cls, unit=KHZ):  
+    cpu = 0
+    fsum = 0
+    while True:
+      fcpu = cls.get_gov_cur_freq(cpu, unit)
+      if fcpu:
+        fsum += fcpu
+        cpu += 1
+      else:
+        break
+    return fsum / cpu
 
   @classmethod
   def set_cpu_field_value(cls, cpu, field, value):  
@@ -291,6 +312,7 @@ class IPMIHelper(object):
 class EnergyMonitor(object):
   def __init__(self, config):
     self.interval = int(config["monitor"]["interval"])
+    self.period_freq = 0
     self.total_energy = 0
     self.period_energy = 0
     self.period_samples = 0
@@ -315,12 +337,22 @@ class EnergyMonitor(object):
       else:
         raise ValueError("Unknown power sensor: " + p)
 
+  def update_freq(self):
+     avg_freq = CpuFreqHelper.get_avg_gov_cur_freq()
+     frac_new = 1. / (self.period_samples + 1)
+     frac_old = self.period_samples * frac_new
+     self.period_freq = frac_old * self.period_freq + frac_new * avg_freq
+
   def update_energy(self):
+     self.update_freq()
      energy = self.sample_energy()
      self.total_energy += energy
      self.period_energy += energy
      self.period_samples += 1
      self.total_samples += 1
+
+  def get_period_avg_freq(self, unit=CpuFreqHelper.KHZ):
+    return self.period_freq / unit
 
   def get_period_energy(self):
     return self.period_energy
@@ -341,7 +373,7 @@ class EnergyMonitor(object):
       return 0
     
   def reset_period(self):
-     self.period_energy = self.period_samples = 0
+     self.period_energy = self.period_freq = self.period_samples = 0
 
 class NoEnergyMonitor(EnergyMonitor):
   def update_energy(self):
@@ -599,21 +631,21 @@ class EcoLogger(object):
     self.log_fname = config["general"]["logfile"]
     if self.log_fname in ["none", "off"]:
       self.log_fname = None
-    self.row_fmt = '{0:<20}\t{1:>10}\t{2:>10}\t{3:>10.3f}\t{4:>10.3f}\t{5:>10.3f}\t{6:>10.3f}'
+    self.row_fmt = '{0:<20}\t{1:>10}\t{2:>10}\t{3:>10}\t{4:>10.3f}\t{5:>10.3f}\t{6:>10.3f}\t{7:>10.3f}'
     self.header_fmt = self.row_fmt.replace(".3f", "")
     self.fmt = NAFormatter()
 
   def print_header(self):
-    print (self.fmt.format(self.header_fmt, "Timestamp", "gCO2/kWh", "Fmax [Mhz]", "Pmax [W]", "Pavg [W]", "Energy [J]", "CO2 [g]"))
+    print (self.fmt.format(self.header_fmt, "Timestamp", "gCO2/kWh", "Fmax [Mhz]", "Favg [Mhz]", "Pmax [W]", "Pavg [W]", "Energy [J]", "CO2 [g]"))
 
-  def print_row(self, co2kwh, energy, avg_power, co2period):
+  def print_row(self, co2kwh, avg_freq, energy, avg_power, co2period):
     ts = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-    freq = power = None
+    max_freq = power = None
     if CpuFreqHelper.available():
-      freq = round(CpuFreqHelper.get_gov_max_freq(CpuFreqHelper.MHZ))
+      max_freq = round(CpuFreqHelper.get_gov_max_freq(unit=CpuFreqHelper.MHZ))
     if LinuxPowercapHelper.available():
       max_power = LinuxPowercapHelper.get_package_power_limit(0, LinuxPowercapHelper.WATT)
-    logstr = self.fmt.format(self.row_fmt, ts, co2kwh, freq, max_power, avg_power, energy, co2period)
+    logstr = self.fmt.format(self.row_fmt, ts, co2kwh, max_freq, round(avg_freq), max_power, avg_power, energy, co2period)
 
 #    logstr += "\t" + str(self.co2history.min_co2()) + "\t" + str(self.co2history.max_co2())
 
@@ -649,13 +681,14 @@ class EcoFreq(object):
       self.period_co2kwh = self.last_co2kwh
 
     # prepare and print log row -> shows values for *past* interval!
+    avg_freq = self.energymon.get_period_avg_freq(CpuFreqHelper.MHZ)
     energy = self.energymon.get_period_energy()
     avg_power = self.energymon.get_period_avg_power()
     if self.period_co2kwh:
       period_co2 = energy * self.period_co2kwh / 3.6e6
     else:
       period_co2 = None
-    self.co2logger.print_row(self.period_co2kwh, energy, avg_power, period_co2) 
+    self.co2logger.print_row(self.period_co2kwh, avg_freq, energy, avg_power, period_co2) 
 
     # apply policy for new co2 reading
     if co2:
