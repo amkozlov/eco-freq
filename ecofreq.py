@@ -670,6 +670,7 @@ class EcoFreq(object):
     self.last_co2kwh = None
     
   def info(self):
+    print("Log file:    ", self.co2logger.log_fname)
     print("CO2 Provider:", type(self.co2provider).__name__, "(interval =", self.co2provider.interval, "sec)")
     print("CO2 Policy:  ", type(self.co2policy).__name__)
     print("Monitors:    ", type(self.energymon).__name__, "(interval =", self.energymon.interval, "sec)")
