@@ -3,7 +3,7 @@
 import sys, json 
 import urllib.request
 from subprocess import call,check_output,STDOUT,DEVNULL,CalledProcessError
-import datetime
+from datetime import datetime
 import time
 import os
 import configparser
@@ -632,14 +632,20 @@ class EcoLogger(object):
     if self.log_fname in ["none", "off"]:
       self.log_fname = None
     self.row_fmt = '{0:<20}\t{1:>10}\t{2:>10}\t{3:>10}\t{4:>10.3f}\t{5:>10.3f}\t{6:>10.3f}\t{7:>10.3f}'
-    self.header_fmt = self.row_fmt.replace(".3f", "")
+    self.header_fmt = "#" + self.row_fmt.replace(".3f", "")
     self.fmt = NAFormatter()
 
+  def log(self, logstr):
+    print (logstr)
+    if self.log_fname:
+      with open(self.log_fname, "a") as logf:
+        logf.write(logstr + "\n")
+
   def print_header(self):
-    print (self.fmt.format(self.header_fmt, "Timestamp", "gCO2/kWh", "Fmax [Mhz]", "Favg [Mhz]", "Pmax [W]", "Pavg [W]", "Energy [J]", "CO2 [g]"))
+    self.log(self.fmt.format(self.header_fmt, "Timestamp", "gCO2/kWh", "Fmax [Mhz]", "Favg [Mhz]", "Pmax [W]", "Pavg [W]", "Energy [J]", "CO2 [g]"))
 
   def print_row(self, co2kwh, avg_freq, energy, avg_power, co2period):
-    ts = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     max_freq = power = None
     if CpuFreqHelper.available():
       max_freq = round(CpuFreqHelper.get_gov_max_freq(unit=CpuFreqHelper.MHZ))
@@ -649,10 +655,7 @@ class EcoLogger(object):
 
 #    logstr += "\t" + str(self.co2history.min_co2()) + "\t" + str(self.co2history.max_co2())
 
-    print (logstr)
-    if self.log_fname:
-      with open(self.log_fname, "a") as logf:
-        logf.write(logstr + "\n")
+    self.log(logstr)
 
 class EcoFreq(object):
   def __init__(self, config):
@@ -680,7 +683,7 @@ class EcoFreq(object):
     co2 = self.co2provider.get_co2()
     if co2:
       if self.last_co2kwh:
-        self.period_co2kwh = round(0.5 * (co2 + self.last_co2kwh))
+        self.period_co2kwh = 0.5 * (co2 + self.last_co2kwh)
       else:
         self.period_co2kwh = co2
     else:
@@ -694,7 +697,7 @@ class EcoFreq(object):
       period_co2 = energy * self.period_co2kwh / 3.6e6
     else:
       period_co2 = None
-    self.co2logger.print_row(self.period_co2kwh, avg_freq, energy, avg_power, period_co2) 
+    self.co2logger.print_row(round(self.period_co2kwh), avg_freq, energy, avg_power, period_co2) 
 
     # apply policy for new co2 reading
     if co2:
@@ -708,14 +711,19 @@ class EcoFreq(object):
       self.co2logger.print_header()
       duration = 0
       self.energymon.reset_period() 
+      elapsed = 0
       while 1:
-        time.sleep(self.sample_interval)
+        to_sleep = self.sample_interval - elapsed
+        #print("to_sleep:", to_sleep)
+        time.sleep(to_sleep)
         duration += self.sample_interval
+        t1 = datetime.now()
         if duration % self.energymon.interval == 0:
           self.energymon.update_energy()
         if duration % self.co2provider.interval == 0:
           self.update_co2()
           self.energymon.reset_period() 
+        elapsed = (datetime.now() - t1).total_seconds()
     except:
       e = sys.exc_info()
       print ("Exception: ", e)
