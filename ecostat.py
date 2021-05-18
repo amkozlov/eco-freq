@@ -12,6 +12,16 @@ LOG_FILE = "/var/log/ecofreq.log"
 TS_FORMAT = "%Y-%m-%dT%H:%M:%S"
 DATE_FORMAT = "%Y-%m-%d"
 
+FIELD_TS = "Timestamp"
+FIELD_CO2KWH = "gCO2/kWh"
+FIELD_FMAX = "Fmax [Mhz]"
+FIELD_FAVG = "Favg [Mhz]"
+FIELD_PMAX = "Pmax [W]"
+FIELD_PAVG = "Pavg [W]"
+FIELD_ENERGY = "Energy [J]"
+FIELD_CO2 = "CO2 [g]"
+LOG_FIELDS = [FIELD_TS, FIELD_CO2KWH, FIELD_FMAX, FIELD_FAVG, FIELD_PMAX, FIELD_PAVG, FIELD_ENERGY, FIELD_CO2]
+
 def parse_timestamp(str, exit_on_error=False):
   ts = None
   for fmt in TS_FORMAT, DATE_FORMAT: 
@@ -57,28 +67,38 @@ class EcoStat(object):
     if not os.path.isfile(self.log_fname):
       print("ERROR: Log file not found: ", self.log_fname)
       sys.exit(-1)
+
+    self.fields = LOG_FIELDS
+    self.update_field_idx()
     
+  def update_field_idx(self):
+    self.time_idx = self.fields.index(FIELD_TS)
+    self.co2kwh_idx = self.fields.index(FIELD_CO2KWH)
+    self.energy_idx = self.fields.index(FIELD_ENERGY)
+    self.co2_idx = self.fields.index(FIELD_CO2)
+
+  def parse_header(self, line):
+    self.fields = [x.strip() for x in line.replace("#", "", 1).split("\t")]
+    self.update_field_idx()
+
   def compute_stats(self):
-    time_idx = 0
-    co2kwh_idx = 1
-    energy_idx = 6
-    co2_idx = 7
     print("Loading data from log file:", self.log_fname, "\n")
     with open(self.log_fname) as f:
       for line in f:
         if line.startswith("#"):
+          self.parse_header(line)
           continue
         toks = line.split("\t")
-        ts = datetime.strptime(toks[time_idx].strip(), TS_FORMAT)
+        ts = datetime.strptime(toks[self.time_idx].strip(), TS_FORMAT)
         if ts < self.ts_start or ts > self.ts_end:
           continue
         self.timestamp_min = min(self.timestamp_min, ts)
         self.timestamp_max = max(self.timestamp_max, ts)
-        co2kwh = float(toks[co2kwh_idx])
+        co2kwh = float(toks[self.co2kwh_idx])
         self.co2kwh_min = min(self.co2kwh_min, co2kwh)
         self.co2kwh_max = max(self.co2kwh_max, co2kwh)
-        self.energy += float(toks[energy_idx]) 
-        self.co2 += float(toks[co2_idx])
+        self.energy += float(toks[self.energy_idx]) 
+        self.co2 += float(toks[self.co2_idx])
         self.samples += 1 
 
   def print_stats(self):
