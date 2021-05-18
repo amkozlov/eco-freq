@@ -22,6 +22,8 @@ FIELD_ENERGY = "Energy [J]"
 FIELD_CO2 = "CO2 [g]"
 LOG_FIELDS = [FIELD_TS, FIELD_CO2KWH, FIELD_FMAX, FIELD_FAVG, FIELD_PMAX, FIELD_PAVG, FIELD_ENERGY, FIELD_CO2]
 
+JOULES_IN_KWH = 3.6e6
+
 def parse_timestamp(str, exit_on_error=False):
   ts = None
   for fmt in TS_FORMAT, DATE_FORMAT: 
@@ -44,8 +46,10 @@ class EcoStat(object):
     self.co2 = 0
     self.co2kwh_min = 1e6
     self.co2kwh_max = 0
+    self.co2kwh_avg = 0
     self.timestamp_min = datetime.max
     self.timestamp_max = datetime.min
+    self.duration = timedelta(seconds = 0)
     
     if args.ts_start:
       self.ts_start = parse_timestamp(args.ts_start, True)
@@ -83,32 +87,55 @@ class EcoStat(object):
 
   def compute_stats(self):
     print("Loading data from log file:", self.log_fname, "\n")
+    last_ts = None
+    co2kwh_sum = 0
+    co2_samples = 0
+    co2_na_energy = 0
     with open(self.log_fname) as f:
       for line in f:
         if line.startswith("#"):
           self.parse_header(line)
+          last_ts = None
           continue
         toks = line.split("\t")
+        
         ts = datetime.strptime(toks[self.time_idx].strip(), TS_FORMAT)
         if ts < self.ts_start or ts > self.ts_end:
           continue
         self.timestamp_min = min(self.timestamp_min, ts)
         self.timestamp_max = max(self.timestamp_max, ts)
-        co2kwh = float(toks[self.co2kwh_idx])
-        self.co2kwh_min = min(self.co2kwh_min, co2kwh)
-        self.co2kwh_max = max(self.co2kwh_max, co2kwh)
-        self.energy += float(toks[self.energy_idx]) 
-        self.co2 += float(toks[self.co2_idx])
-        self.samples += 1 
+        if last_ts:
+          self.duration += (ts - last_ts)
+        last_ts = ts
+          
+        energy = float(toks[self.energy_idx]) 
+        self.energy += energy 
+
+        co2kwh = toks[self.co2kwh_idx].strip()
+        if co2kwh != "NA":
+          co2kwh = float(co2kwh)
+          co2kwh_sum += co2kwh
+          co2_samples += 1
+          self.co2kwh_min = min(self.co2kwh_min, co2kwh)
+          self.co2kwh_max = max(self.co2kwh_max, co2kwh)
+          self.co2 += float(toks[self.co2_idx])
+        else:
+          co2_na_energy += energy
+        self.samples += 1
+        
+    if co2_samples > 0:
+      self.co2kwh_avg = co2kwh_sum / co2_samples
+      self.co2 += self.co2kwh_avg * (co2_na_energy / JOULES_IN_KWH)
 
   def print_stats(self):
     if self.samples> 0:
-      print ("Time interval:        ", self.timestamp_min, "-", self.timestamp_max)     
-      print ("Duration:             ", self.timestamp_max - self.timestamp_min)     
-      print ("CO2 intensity [g/kWh]:", round(self.co2kwh_min), "-", round(self.co2kwh_max))     
-      print ("Energy consumed [J]:  ", round(self.energy, 3))     
-      print ("Energy consumed [kWh]:", round(self.energy / 3.6e6, 3))     
-      print ("CO2 emitted [kg]:     ", round(self.co2 / 1000., 6))  
+      print ("Time interval:              ", self.timestamp_min, "-", self.timestamp_max)     
+      print ("Duration (excl. gaps):      ", self.duration)     
+      print ("CO2 intensity range [g/kWh]:", round(self.co2kwh_min), "-", round(self.co2kwh_max))     
+      print ("CO2 intensity mean [g/kWh]: ", round(self.co2kwh_avg))     
+      print ("Energy consumed [J]:        ", round(self.energy, 3))     
+      print ("Energy consumed [kWh]:      ", round(self.energy / JOULES_IN_KWH, 3))     
+      print ("CO2 emitted [kg]:           ", round(self.co2 / 1000., 6))  
     else:
       print ("No samples found in the given time interval!")
     print("")   
