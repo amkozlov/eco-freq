@@ -29,6 +29,9 @@ def write_value(fname, val):
       return True
     else:
       return False
+
+def safe_round(val):
+  return round(val) if (isinstance(val, float)) else val
     
 class NAFormatter(string.Formatter):
     def __init__(self, missing='NA'):
@@ -651,7 +654,7 @@ class EcoLogger(object):
       max_freq = round(CpuFreqHelper.get_gov_max_freq(unit=CpuFreqHelper.MHZ))
     if LinuxPowercapHelper.available():
       max_power = LinuxPowercapHelper.get_package_power_limit(0, LinuxPowercapHelper.WATT)
-    logstr = self.fmt.format(self.row_fmt, ts, co2kwh, max_freq, round(avg_freq), max_power, avg_power, energy, co2period)
+    logstr = self.fmt.format(self.row_fmt, ts, safe_round(co2kwh), max_freq, safe_round(avg_freq), max_power, avg_power, energy, co2period)
 
 #    logstr += "\t" + str(self.co2history.min_co2()) + "\t" + str(self.co2history.max_co2())
 
@@ -697,7 +700,7 @@ class EcoFreq(object):
       period_co2 = energy * self.period_co2kwh / 3.6e6
     else:
       period_co2 = None
-    self.co2logger.print_row(round(self.period_co2kwh), avg_freq, energy, avg_power, period_co2) 
+    self.co2logger.print_row(self.period_co2kwh, avg_freq, energy, avg_power, period_co2) 
 
     # apply policy for new co2 reading
     if co2:
