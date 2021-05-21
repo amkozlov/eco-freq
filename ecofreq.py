@@ -433,6 +433,9 @@ class IPMIEnergyMonitor(EnergyMonitor):
 
   def sample_energy(self):
     cur_pwr = IPMIHelper.get_power()
+    if not cur_pwr:
+      print ("WARNING: IPMI power reading failed!")
+      cur_pwr = self.last_pwr
     avg_pwr = 0.5 * (self.last_pwr + cur_pwr)
     energy_diff = avg_pwr * self.interval
     self.last_pwr = cur_pwr
@@ -716,7 +719,7 @@ class EcoFreq(object):
       self.energymon.reset_period() 
       elapsed = 0
       while 1:
-        to_sleep = self.sample_interval - elapsed
+        to_sleep = max(self.sample_interval - elapsed, 0)
         #print("to_sleep:", to_sleep)
         time.sleep(to_sleep)
         duration += self.sample_interval
