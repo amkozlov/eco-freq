@@ -50,6 +50,7 @@ class EcoStat(object):
     self.timestamp_min = datetime.max
     self.timestamp_max = datetime.min
     self.duration = timedelta(seconds = 0)
+    self.gap_duration = timedelta(seconds = 0)
     
     if args.ts_start:
       self.ts_start = parse_timestamp(args.ts_start, True)
@@ -88,6 +89,7 @@ class EcoStat(object):
   def compute_stats(self):
     print("Loading data from log file:", self.log_fname, "\n")
     last_ts = None
+    gap_start_ts = None
     co2kwh_sum = 0
     co2_samples = 0
     co2_na_energy = 0
@@ -95,6 +97,7 @@ class EcoStat(object):
       for line in f:
         if line.startswith("#"):
           self.parse_header(line)
+          gap_start_ts = last_ts
           last_ts = None
           continue
         toks = line.split("\t")
@@ -106,6 +109,9 @@ class EcoStat(object):
         self.timestamp_max = max(self.timestamp_max, ts)
         if last_ts:
           self.duration += (ts - last_ts)
+        elif gap_start_ts:
+          self.gap_duration += (ts - gap_start_ts)
+          gap_start_ts = None
         last_ts = ts
           
         energy = float(toks[self.energy_idx]) 
@@ -130,7 +136,8 @@ class EcoStat(object):
   def print_stats(self):
     if self.samples> 0:
       print ("Time interval:              ", self.timestamp_min, "-", self.timestamp_max)     
-      print ("Duration (excl. gaps):      ", self.duration)     
+      print ("Duration active:            ", self.duration)     
+      print ("Duration inactive:          ", self.gap_duration)     
       print ("CO2 intensity range [g/kWh]:", round(self.co2kwh_min), "-", round(self.co2kwh_max))     
       print ("CO2 intensity mean [g/kWh]: ", round(self.co2kwh_avg))     
       print ("Energy consumed [J]:        ", round(self.energy, 3))     
