@@ -272,6 +272,13 @@ class LinuxPowercapHelper(object):
     return read_int_value(cls.package_file(pkg, "max_energy_range_uj")) 
 
   @classmethod
+  def get_power_limit(cls, unit=UWATT):
+    power = 0
+    for pkg in cls.package_list(): 
+      power += cls.get_package_power_limit(pkg, unit)
+    return power
+
+  @classmethod
   def set_package_power_limit(cls, pkg, power, unit=UWATT):
     val = round(power * unit)
     write_value(cls.package_file(pkg, "constraint_0_power_limit_uw"), val)
@@ -637,7 +644,7 @@ class EcoLogger(object):
     self.log_fname = config["general"]["logfile"]
     if self.log_fname in ["none", "off"]:
       self.log_fname = None
-    self.row_fmt = '{0:<20}\t{1:>10}\t{2:>10}\t{3:>10}\t{4:>10.3f}\t{5:>10.3f}\t{6:>10.3f}\t{7:>10.3f}'
+    self.row_fmt = '{0:<20}\t{1:>10}\t{2:>10}\t{3:>10}\t{4:>12.3f}\t{5:>12.3f}\t{6:>10.3f}\t{7:>10.3f}'
     self.header_fmt = "#" + self.row_fmt.replace(".3f", "")
     self.fmt = NAFormatter()
 
@@ -648,7 +655,7 @@ class EcoLogger(object):
         logf.write(logstr + "\n")
 
   def print_header(self):
-    self.log(self.fmt.format(self.header_fmt, "Timestamp", "gCO2/kWh", "Fmax [Mhz]", "Favg [Mhz]", "Pmax [W]", "Pavg [W]", "Energy [J]", "CO2 [g]"))
+    self.log(self.fmt.format(self.header_fmt, "Timestamp", "gCO2/kWh", "Fmax [Mhz]", "Favg [Mhz]", "CPU_Pmax [W]", "SYS_Pavg [W]", "Energy [J]", "CO2 [g]"))
 
   def print_row(self, co2kwh, avg_freq, energy, avg_power, co2period):
     ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
@@ -656,7 +663,7 @@ class EcoLogger(object):
     if CpuFreqHelper.available():
       max_freq = round(CpuFreqHelper.get_gov_max_freq(unit=CpuFreqHelper.MHZ))
     if LinuxPowercapHelper.available():
-      max_power = LinuxPowercapHelper.get_package_power_limit(0, LinuxPowercapHelper.WATT)
+      max_power = LinuxPowercapHelper.get_power_limit(LinuxPowercapHelper.WATT)
     logstr = self.fmt.format(self.row_fmt, ts, safe_round(co2kwh), max_freq, safe_round(avg_freq), max_power, avg_power, energy, co2period)
 
 #    logstr += "\t" + str(self.co2history.min_co2()) + "\t" + str(self.co2history.max_co2())
