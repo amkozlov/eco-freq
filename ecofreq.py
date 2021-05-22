@@ -327,6 +327,7 @@ class EnergyMonitor(object):
     self.period_energy = 0
     self.period_samples = 0
     self.total_samples = 0
+    self.monitor_freq = CpuFreqHelper.available()
 
   @classmethod
   def from_config(cls, config):
@@ -354,7 +355,8 @@ class EnergyMonitor(object):
      self.period_freq = frac_old * self.period_freq + frac_new * avg_freq
 
   def update_energy(self):
-     self.update_freq()
+     if self.monitor_freq:
+       self.update_freq()
      energy = self.sample_energy()
      self.total_energy += energy
      self.period_energy += energy
@@ -362,8 +364,11 @@ class EnergyMonitor(object):
      self.total_samples += 1
 
   def get_period_avg_freq(self, unit=CpuFreqHelper.KHZ):
-    return self.period_freq / unit
-
+    if self.monitor_freq:
+      return self.period_freq / unit
+    else:
+      return None
+    
   def get_period_energy(self):
     return self.period_energy
 
