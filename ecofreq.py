@@ -408,13 +408,27 @@ class PowercapEnergyMonitor(EnergyMonitor):
     else:
       self.psys_domain = False
       self.pkg_list = LinuxPowercapHelper.package_list("package-")
+      if self.pkg_list:
+        self.cpu_max_power_uw = LinuxPowercapHelper.get_package_hw_max_power(self.pkg_list[0])
       self.pkg_list += LinuxPowercapHelper.package_list("dram")
     self.last_energy = {}
     self.energy_range = {}
     for p in self.pkg_list:
       self.last_energy[p] = 0
       self.energy_range[p] = LinuxPowercapHelper.get_package_energy_range(p)
+    #hard-coded for now
+    self.estimate_full_power = True
+    self.syspower_coeff_const = 0.25
+    self.syspower_coeff_var = 0.25
     self.sample_energy()
+    
+  def full_system_energy(self, energy_diff):
+    if self.psys_domain or not self.estimate_full_power:
+      return energy_diff
+    else:
+      sysenergy_const = self.cpu_max_power_uw * self.syspower_coeff_const * self.interval
+      sysenegy_var = (1. + self.syspower_coeff_var) * energy_diff
+      return sysenergy_const + sysenegy_var 
 
   def sample_energy(self):
     energy_diff = 0
@@ -426,6 +440,7 @@ class PowercapEnergyMonitor(EnergyMonitor):
         diff_uj = new_energy + (self.energy_range[p] - self.last_energy[p]);
       self.last_energy[p] = new_energy
       energy_diff += diff_uj
+    energy_diff = self.full_system_energy(energy_diff)
     energy_diff_j = energy_diff / self.JOULE  
     return energy_diff_j
 
