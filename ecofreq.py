@@ -421,10 +421,10 @@ class PowercapEnergyMonitor(EnergyMonitor):
     for p in self.pkg_list:
       self.last_energy[p] = 0
       self.energy_range[p] = LinuxPowercapHelper.get_package_energy_range(p)
-    #hard-coded for now
-    self.estimate_full_power = True
-    self.syspower_coeff_const = 0.25
-    self.syspower_coeff_var = 0.25
+    c = config['powercap'] if 'powercap' in config else {}
+    self.estimate_full_power = c.get('EstimateFullPower', True)
+    self.syspower_coeff_const = c.get('FullPowerConstCoeff', 0.3)
+    self.syspower_coeff_var = c.get('FullPowerVarCoeff', 0.25)
     self.sample_energy()
     
   def full_system_energy(self, energy_diff):
