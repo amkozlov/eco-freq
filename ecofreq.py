@@ -43,6 +43,34 @@ class NAFormatter(string.Formatter):
           spec = spec.replace("f", "s")
         return super(NAFormatter, self).format_field(value, spec)
 
+class GeoHelper(object):
+  API_URL = "http://ipinfo.io"    
+  
+  @classmethod
+  def get_my_geoinfo(self):
+    req = urllib.request.Request(self.API_URL)
+#    req.add_header("User-Agent", "Mozilla/5.0 (X11; U; Linux i686) Gecko/20071127 Firefox/2.0.0.11")
+
+    try:
+      resp = urllib.request.urlopen(req).read()
+      js = json.loads(resp)
+      return js
+    except:
+      e = sys.exc_info()[0]
+      print ("Exception: ", e)
+      return None
+      
+  @classmethod
+  def get_my_coords(self):
+    try:
+      js = self.get_my_geoinfo()
+      lat, lon = js['loc'].split(",")
+    except:
+      e = sys.exc_info()[0]
+      print ("Exception: ", e)
+      lat, lon = None
+    return lat, lon
+
 class CpuInfoHelper(object):
   CMD_LSCPU = "lscpu"
   
@@ -482,6 +510,10 @@ class EmissionProvider(object):
       raise ValueError("Unknown emission provider: " + p)
 
 class CO2Signal(object):
+  URL_BASE = "https://api.co2signal.com/v1/latest?"
+  URL_COUNTRY = URL_BASE + "countryCode={0}"
+  URL_COORD = URL_BASE + "lat={0}&lon={1}"
+  
   def __init__(self, config):
     EmissionProvider.__init__(self, config)
     self.co2country = config["co2signal"]["country"]
@@ -490,9 +522,19 @@ class CO2Signal(object):
     if not self.co2token:
       print ("ERROR: Please specify CO2Signal API token!")
       sys.exit(-1)
+      
+    if self.co2country.lower().startswith("auto"):
+      self.coord_lat, self.coord_lon = GeoHelper.get_my_coords()
+    self.update_url()
+
+  def update_url(self):
+    if not self.co2country.lower().startswith("auto"):
+      self.api_url = self.URL_COUNTRY.format(self.co2country)
+    else:
+      self.api_url = self.URL_COORD.format(self.coord_lat, self.coord_lon)
 
   def get_co2(self):
-    req = urllib.request.Request("https://api.co2signal.com/v1/latest?countryCode=" + self.co2country)
+    req = urllib.request.Request(self.api_url)
     req.add_header("User-Agent", "Mozilla/5.0 (X11; U; Linux i686) Gecko/20071127 Firefox/2.0.0.11")
     req.add_header("auth-token", self.co2token)
 
