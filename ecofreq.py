@@ -14,6 +14,7 @@ import string
 from math import ceil
 
 LOG_FILE = "/var/log/ecofreq.log"
+OPTION_DISABLED = ["none", "off"]
 
 def read_value(fname):
     with open(fname) as f:
@@ -588,7 +589,7 @@ class EcoPolicy(object):
       return LinearPowerEcoPolicy(config)
     elif c == "frequency" and t == "linear":
       return LinearFreqEcoPolicy(config)
-    elif c in ["none", "off"]:
+    elif c in OPTION_DISABLED or t in OPTION_DISABLED:
       return NoEcoPolicy(config)
     else:
       raise ValueError("Unknown policy: " + [c, t])
@@ -704,7 +705,7 @@ class CO2History(object):
 class EcoLogger(object):
   def __init__(self, config):
     self.log_fname = config["general"]["logfile"]
-    if self.log_fname in ["none", "off"]:
+    if self.log_fname in OPTION_DISABLED:
       self.log_fname = None
     self.row_fmt = '{0:<20}\t{1:>10}\t{2:>10}\t{3:>10}\t{4:>12.3f}\t{5:>12.3f}\t{6:>10.3f}\t{7:>10.3f}'
     self.header_fmt = "#" + self.row_fmt.replace(".3f", "")

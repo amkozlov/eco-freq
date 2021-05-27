@@ -8,11 +8,17 @@ TODO add plot + more details
 
 # Installation
 
-Install as systemd service:
+* Prerequisites:
+ - Currently, only Linux systems are supported (tested with Ubuntu and CentOS)
+ - EcoFreq daemon requires root privileges
+ - For realtime CO2 tracking to work, please get your free API token here: https://co2signal.com/ 
+ - If you want to use IPMI power measurements, please install [`ipmitool`](https://github.com/ipmitool/ipmitool)
 
-TODO
+* Please run installer script which will create a config file and register `systemd` service for EcoFreq:
 
-If you want to use IPMI power measurements, please install `ipmitool`.
+```
+sudo ./install.sh
+```
 
 # Usage
 
