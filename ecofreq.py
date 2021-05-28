@@ -861,11 +861,11 @@ def diag():
 if __name__ == '__main__':
 
   args = parse_args()
-  cfg = read_config(args)
 
   diag()
 
   if not args.diag:
+    cfg = read_config(args)
     ef = EcoFreq(cfg)
     ef.info()
     print("")
