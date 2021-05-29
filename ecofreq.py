@@ -72,6 +72,47 @@ class GeoHelper(object):
       lat, lon = None
     return lat, lon
 
+class NvidiaGPUHelper(object):
+  CMD_NVSMI = "nvidia-smi"
+
+  @classmethod
+  def available(cls):
+    return call(cls.CMD_NVSMI, shell=True, stdout=DEVNULL, stderr=DEVNULL) == 0
+
+  @classmethod
+  def query_gpus(cls, fields, fmt = "csv,noheader,nounits"):
+    cmdline = cls.CMD_NVSMI + " --format=" + fmt +  " --query-gpu=" + fields 
+    out = check_output(cmdline, shell=True, stderr=DEVNULL, universal_newlines=True)
+    result = []
+    for line in out.split("\n"):
+      if line:
+        result.append([x.strip() for x in line.split(",")])
+    return result  
+
+  @classmethod
+  def get_power(cls):
+    pwr = [ float(x[0]) for x in cls.query_gpus(fields = "power.draw") ]
+    return sum(pwr)
+
+  @classmethod
+  def get_power_limit(cls):
+    pwr = [ float(x[0]) for x in cls.query_gpus(fields = "power.limit") ]
+    return sum(pwr)
+
+  @classmethod
+  def set_power_limit(cls, max_gpu_power):
+    cmdline = cls.CMD_NVSMI + " -pl " + str(max_gpu_power)
+    out = check_output(cmdline, shell=True, stderr=DEVNULL, universal_newlines=True)
+
+  @classmethod
+  def info(cls):
+    if cls.available():
+      field_list = "name,power.min_limit,power.max_limit,power.limit"
+      cnt = 0
+      for gi in cls.query_gpus(fields = field_list, fmt="csv,noheader"):
+        print ("GPU" + str(cnt) + ": " + gi[0] + ", min_hw_limit = " + gi[1] + ", max_hw_limit = " + gi[2] + ", current_limit = " + gi[3])
+        cnt += 1
+
 class CpuInfoHelper(object):
   CMD_LSCPU = "lscpu"
   
@@ -348,56 +389,161 @@ class IPMIHelper(object):
     except CalledProcessError:
       return None
 
-class EnergyMonitor(object):
+class MonitorManager(object):
+  def __init__(self, config):
+    self.monitors = EnergyMonitor.from_config(config)
+    self.monitors += FreqMonitor.from_config(config)
+    
+  def info_string(self):
+    s = []
+    for m in self.monitors:
+      s.append(type(m).__name__ + " (interval = " + str(m.interval) + " sec)")
+    return ", ".join(s)
+
+  def adjust_interval(self, period):
+    min_interval = min([m.interval for m in self.monitors])
+    int_ratio = ceil(period / min_interval)
+    sample_interval = round(period / int_ratio)
+    for m in self.monitors:
+      if m.interval % sample_interval > 0:
+        m.interval = sample_interval * int(m.interval / sample_interval)
+    return sample_interval
+
+  def update(self, duration):
+    for m in self.monitors:
+      if duration % m.interval == 0:
+        m.update()
+      
+  def reset_period(self):
+    for m in self.monitors:
+      m.reset_period()
+
+  def get_reading(self, metric, domain, method):
+    for m in self.monitors:
+      pass
+    
+  def get_period_energy(self):
+    result = 0
+    for m in self.monitors:
+      if issubclass(type(m), EnergyMonitor):
+        result += m.get_period_energy()
+    return result
+
+  def get_period_avg_power(self):
+    result = 0
+    for m in self.monitors:
+      if issubclass(type(m), EnergyMonitor):
+        result += m.get_period_avg_power()
+    return result
+
+  def get_period_cpu_avg_freq(self, unit):
+    for m in self.monitors:
+      if issubclass(type(m), CPUFreqMonitor):
+        return m.get_period_avg_freq(unit)
+    return None
+
+class Monitor(object):
   def __init__(self, config):
     self.interval = int(config["monitor"]["interval"])
-    self.period_freq = 0
-    self.total_energy = 0
-    self.period_energy = 0
     self.period_samples = 0
     self.total_samples = 0
+    
+  def reset_period(self):
+    self.period_samples = 0
+
+  # subclasses must override this to call actual update routine
+  def update_impl(self):
+    pass
+  
+  def update(self):
+    self.update_impl() 
+    self.period_samples += 1
+    self.total_samples += 1
+
+class FreqMonitor(Monitor):
+  def __init__(self, config):
+    Monitor.__init__(self, config)
+    self.period_freq = 0
+
+  def reset_period(self):
+    Monitor.reset_period(self)
+    self.period_freq = 0
+
+  @classmethod
+  def from_config(cls, config):
+    sens_dict = { "cpu" : CPUFreqMonitor }
+    p = config["monitor"].get("FreqSensor", "auto").lower()
+    monitors = []
+    if p in OPTION_DISABLED:
+      pass
+    elif p == "auto":
+      if CPUFreqMonitor.available():
+        monitors.append(CPUFreqMonitor(config))
+    else:
+      for s in p.split(","):
+        if s in sens_dict:
+          monitors.append(sens_dict[s](config))  
+        else:
+          raise ValueError("Unknown frequency sensor: " + p)
+    return monitors
+
+class CPUFreqMonitor(FreqMonitor):
+  def __init__(self, config):
+    FreqMonitor.__init__(self, config)
+ 
+  @classmethod
+  def available(cls):
+    return CpuFreqHelper.available()
+  
+  def update_freq(self):
+    avg_freq = CpuFreqHelper.get_avg_gov_cur_freq()
+    frac_new = 1. / (self.period_samples + 1)
+    frac_old = self.period_samples * frac_new
+    self.period_freq = frac_old * self.period_freq + frac_new * avg_freq
+
+  def update_impl(self):
+    self.update_freq()
+    
+  def get_period_avg_freq(self, unit=CpuFreqHelper.KHZ):
+    return self.period_freq / unit
+     
+class EnergyMonitor(Monitor):
+  def __init__(self, config):
+    Monitor.__init__(self, config)
+    self.total_energy = 0
+    self.period_energy = 0
     self.monitor_freq = CpuFreqHelper.available()
 
   @classmethod
   def from_config(cls, config):
-    sens_dict = {"rapl" : PowercapEnergyMonitor, "ipmi" : IPMIEnergyMonitor }
+    sens_dict = {"rapl" : PowercapEnergyMonitor, "ipmi" : IPMIEnergyMonitor, "gpu" : GPUEnergyMonitor }
     p = config["monitor"].get("PowerSensor", "auto").lower()
-    if p == "none":
-      return NoEnergyMonitor(config)
+    monitors = []
+    if p in OPTION_DISABLED:
+      pass
     elif p == "auto":
       if IPMIEnergyMonitor.available():
-        return IPMIEnergyMonitor(config)
-      elif PowercapEnergyMonitor.available():
-        return PowercapEnergyMonitor(config)
-      else:
-        return NoEnergyMonitor(config)
+        monitors.append(IPMIEnergyMonitor(config))
+      if PowercapEnergyMonitor.available():
+        monitors.append(PowercapEnergyMonitor(config))
+      if NvidiaGPUHelper.available():
+        monitors.append(GPUEnergyMonitor(config))
     else:
-      if p in sens_dict:
-        return sens_dict[p](config)  
-      else:
-        raise ValueError("Unknown power sensor: " + p)
-
-  def update_freq(self):
-     avg_freq = CpuFreqHelper.get_avg_gov_cur_freq()
-     frac_new = 1. / (self.period_samples + 1)
-     frac_old = self.period_samples * frac_new
-     self.period_freq = frac_old * self.period_freq + frac_new * avg_freq
+      for s in p.split(","):
+        if s in sens_dict:
+          monitors.append(sens_dict[s](config))  
+        else:
+          raise ValueError("Unknown power sensor: " + p)
+    return monitors
 
   def update_energy(self):
-     if self.monitor_freq:
-       self.update_freq()
      energy = self.sample_energy()
      self.total_energy += energy
      self.period_energy += energy
-     self.period_samples += 1
-     self.total_samples += 1
 
-  def get_period_avg_freq(self, unit=CpuFreqHelper.KHZ):
-    if self.monitor_freq:
-      return self.period_freq / unit
-    else:
-      return None
-    
+  def update_impl(self):
+    self.update_energy()
+ 
   def get_period_energy(self):
     return self.period_energy
 
@@ -417,7 +563,8 @@ class EnergyMonitor(object):
       return 0
     
   def reset_period(self):
-     self.period_energy = self.period_freq = self.period_samples = 0
+    Monitor.reset_period(self)
+    self.period_energy = 0
 
 class NoEnergyMonitor(EnergyMonitor):
   def update_energy(self):
@@ -477,6 +624,25 @@ class PowercapEnergyMonitor(EnergyMonitor):
     energy_diff = self.full_system_energy(energy_diff)
     energy_diff_j = energy_diff / self.JOULE  
     return energy_diff_j
+
+class GPUEnergyMonitor(EnergyMonitor):
+  def __init__(self, config):
+    EnergyMonitor.__init__(self, config)
+    self.last_pwr = 0
+
+  @classmethod
+  def available(cls):
+    return NvidiaGPUHelper.available()
+
+  def sample_energy(self):
+    cur_pwr = NvidiaGPUHelper.get_power()
+    if not cur_pwr:
+      print ("WARNING: GPU power reading failed!")
+      cur_pwr = self.last_pwr
+    avg_pwr = 0.5 * (self.last_pwr + cur_pwr)
+    energy_diff = avg_pwr * self.interval
+    self.last_pwr = cur_pwr
+    return energy_diff
 
 class IPMIEnergyMonitor(EnergyMonitor):
   def __init__(self, config):
@@ -707,7 +873,8 @@ class EcoLogger(object):
     self.log_fname = config["general"]["logfile"]
     if self.log_fname in OPTION_DISABLED:
       self.log_fname = None
-    self.row_fmt = '{0:<20}\t{1:>10}\t{2:>10}\t{3:>10}\t{4:>12.3f}\t{5:>12.3f}\t{6:>10.3f}\t{7:>10.3f}'
+    # self.row_fmt = '{0:<20}\t{1:>10}\t{2:>10}\t{3:>10}\t{4:>12.3f}\t{5:>12.3f}\t{6:>10.3f}\t{7:>10.3f}'
+    self.row_fmt = '{:<20}\t{:>10}\t{:>10}\t{:>10}\t{:>12.3f}\t{:>12.3f}\t{:>12.3f}\t{:>10.3f}\t{:>10.3f}'
     self.header_fmt = "#" + self.row_fmt.replace(".3f", "")
     self.fmt = NAFormatter()
 
@@ -718,16 +885,18 @@ class EcoLogger(object):
         logf.write(logstr + "\n")
 
   def print_header(self):
-    self.log(self.fmt.format(self.header_fmt, "Timestamp", "gCO2/kWh", "Fmax [Mhz]", "Favg [Mhz]", "CPU_Pmax [W]", "SYS_Pavg [W]", "Energy [J]", "CO2 [g]"))
+    self.log(self.fmt.format(self.header_fmt, "Timestamp", "gCO2/kWh", "Fmax [Mhz]", "Favg [Mhz]", "CPU_Pmax [W]", "GPU_Pmax [W]", "SYS_Pavg [W]", "Energy [J]", "CO2 [g]"))
 
   def print_row(self, co2kwh, avg_freq, energy, avg_power, co2period):
     ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-    max_freq = power = None
+    max_freq = cpu_max_power = gpu_max_power = None
     if CpuFreqHelper.available():
       max_freq = round(CpuFreqHelper.get_gov_max_freq(unit=CpuFreqHelper.MHZ))
     if LinuxPowercapHelper.available():
-      max_power = LinuxPowercapHelper.get_power_limit(LinuxPowercapHelper.WATT)
-    logstr = self.fmt.format(self.row_fmt, ts, safe_round(co2kwh), max_freq, safe_round(avg_freq), max_power, avg_power, energy, co2period)
+      cpu_max_power = LinuxPowercapHelper.get_power_limit(LinuxPowercapHelper.WATT)
+    if NvidiaGPUHelper.available():
+      gpu_max_power = NvidiaGPUHelper.get_power_limit()
+    logstr = self.fmt.format(self.row_fmt, ts, safe_round(co2kwh), max_freq, safe_round(avg_freq), cpu_max_power, gpu_max_power, avg_power, energy, co2period)
 
 #    logstr += "\t" + str(self.co2history.min_co2()) + "\t" + str(self.co2history.max_co2())
 
@@ -740,19 +909,18 @@ class EcoFreq(object):
     self.co2policy = EcoPolicy.from_config(config)
     self.co2history = CO2History(config)
     self.co2logger = EcoLogger(config)
-    self.energymon = EnergyMonitor.from_config(config)
+    self.monitor = MonitorManager(config)
     self.debug = False
     # make sure that CO2 sampling interval is a multiple of energy sampling interval
-    int_ratio = ceil(self.co2provider.interval / self.energymon.interval)
-    self.sample_interval = self.energymon.interval = round(self.co2provider.interval / int_ratio)
-    # print("sampling intervals co2/energy:", self.co2provider.interval, self.energymon.interval)
+    self.sample_interval = self.monitor.adjust_interval(self.co2provider.interval)
+    # print("sampling intervals co2/energy:", self.co2provider.interval, self.sample_interval)
     self.last_co2kwh = None
     
   def info(self):
     print("Log file:    ", self.co2logger.log_fname)
     print("CO2 Provider:", type(self.co2provider).__name__, "(interval =", self.co2provider.interval, "sec)")
     print("CO2 Policy:  ", type(self.co2policy).__name__)
-    print("Monitors:    ", type(self.energymon).__name__, "(interval =", self.energymon.interval, "sec)")
+    print("Monitors:    ", self.monitor.info_string())
 
   def update_co2(self):
     # fetch new co2 intensity 
@@ -766,9 +934,9 @@ class EcoFreq(object):
       self.period_co2kwh = self.last_co2kwh
 
     # prepare and print log row -> shows values for *past* interval!
-    avg_freq = self.energymon.get_period_avg_freq(CpuFreqHelper.MHZ)
-    energy = self.energymon.get_period_energy()
-    avg_power = self.energymon.get_period_avg_power()
+    avg_freq = self.monitor.get_period_cpu_avg_freq(CpuFreqHelper.MHZ)
+    energy = self.monitor.get_period_energy()
+    avg_power = self.monitor.get_period_avg_power()
     if self.period_co2kwh:
       period_co2 = energy * self.period_co2kwh / 3.6e6
     else:
@@ -786,7 +954,7 @@ class EcoFreq(object):
     try:
       self.co2logger.print_header()
       duration = 0
-      self.energymon.reset_period() 
+      self.monitor.reset_period() 
       elapsed = 0
       while 1:
         to_sleep = max(self.sample_interval - elapsed, 0)
@@ -794,11 +962,10 @@ class EcoFreq(object):
         time.sleep(to_sleep)
         duration += self.sample_interval
         t1 = datetime.now()
-        if duration % self.energymon.interval == 0:
-          self.energymon.update_energy()
+        self.monitor.update(duration)
         if duration % self.co2provider.interval == 0:
           self.update_co2()
-          self.energymon.reset_period() 
+          self.monitor.reset_period() 
         elapsed = (datetime.now() - t1).total_seconds()
     except:
       e = sys.exc_info()
@@ -848,12 +1015,14 @@ def read_config(args):
   return parser
 
 def diag():
-  print("EcoFreq v0.0.1\n")
+  print("EcoFreq v0.0.1 (c) 2021 Alexey Kozlov\n")
   CpuInfoHelper.info()
   print("")
   LinuxPowercapHelper.info()
   print("")
   CpuFreqHelper.info()
+  print("")
+  NvidiaGPUHelper.info()
   print("")
   IPMIHelper.info()
   print("")
@@ -870,3 +1039,4 @@ if __name__ == '__main__':
     ef.info()
     print("")
     ef.spin()
+
