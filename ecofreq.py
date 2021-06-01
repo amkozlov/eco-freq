@@ -11,6 +11,7 @@ import argparse
 import random
 import heapq
 import string
+import traceback
 from math import ceil
 
 LOG_FILE = "/var/log/ecofreq.log"
@@ -77,7 +78,13 @@ class NvidiaGPUHelper(object):
 
   @classmethod
   def available(cls):
-    return call(cls.CMD_NVSMI, shell=True, stdout=DEVNULL, stderr=DEVNULL) == 0
+#    return call(cls.CMD_NVSMI, shell=True, stdout=DEVNULL, stderr=DEVNULL) == 0
+     try:
+       out = cls.query_gpus(fields = "power.draw,power.management")
+#       print (out)
+       return "Enabled" in out[0][1]
+     except CalledProcessError:
+       return False
 
   @classmethod
   def query_gpus(cls, fields, fmt = "csv,noheader,nounits"):
@@ -98,6 +105,10 @@ class NvidiaGPUHelper(object):
   def get_power_limit(cls):
     pwr = [ float(x[0]) for x in cls.query_gpus(fields = "power.limit") ]
     return sum(pwr)
+
+  @classmethod
+  def get_power_limit_all(cls):
+   return cls.query_gpus(fields = "power.min_limit,power.max_limit,power.limit")
 
   @classmethod
   def set_power_limit(cls, max_gpu_power):
@@ -524,10 +535,11 @@ class EnergyMonitor(Monitor):
     elif p == "auto":
       if IPMIEnergyMonitor.available():
         monitors.append(IPMIEnergyMonitor(config))
-      if PowercapEnergyMonitor.available():
-        monitors.append(PowercapEnergyMonitor(config))
-      if NvidiaGPUHelper.available():
-        monitors.append(GPUEnergyMonitor(config))
+      else:
+        if PowercapEnergyMonitor.available():
+          monitors.append(PowercapEnergyMonitor(config))
+        if NvidiaGPUHelper.available():
+          monitors.append(GPUEnergyMonitor(config))
     else:
       for s in p.split(","):
         if s in sens_dict:
@@ -728,20 +740,79 @@ class MockCO2Provider(object):
     #   co2 = None
     return co2
 
-class EcoPolicy(object):
-  def __init__(self, config):
-    self.freq_round = 3
-    self.debug = False
+class Governor(object):
+  def __init__(self, config, vmin, vmax):
     r = config["policy"]["CO2Range"].lower()
     if r == "auto":
       self.co2min = self.co2max = -1
     else:
       self.co2min, self.co2max = [int(x) for x in r.split("-")]
+    self.val_round = 3
+
+  @classmethod
+  def from_config(cls, config, vmin, vmax):
+    t = config["policy"]["Governor"].lower()
+
+    if t == "linear":
+      return LinearGovernor(config, vmin, vmax)
+    elif t == "maxperf":
+      return ConstantGovernor(config, vmax)
+    elif t in OPTION_DISABLED:
+      return None
+    else:
+      raise ValueError("Unknown governor: " + t)
+
+class ConstantGovernor(Governor):
+  def __init__(self, config, val):
+    Governor.__init__(self, config, val, val)
+    self.val = val
+
+  def co2val(self, co2):
+    return self.val
+  
+class LinearGovernor(Governor):
+  def __init__(self, config, vmin, vmax):
+    Governor.__init__(self, config, vmin, vmax)
+    self.vmin = vmin
+    self.vmax = vmax
+
+  def co2val(self, co2):
+    if co2 >= self.co2max:
+      k = 0.0
+    elif co2 <= self.co2min:
+      k = 1.0
+    else:
+      k = 1.0 - float(co2 - self.co2min) / (self.co2max - self.co2min)
+    val = self.vmin + (self.vmax - self.vmin) * k
+    val = int(round(val, self.val_round))
+    return val
+
+class EcoPolicy(object):
+  def __init__(self, config):
+    self.debug = False
+
+  def info_string(self):
+    g = type(self.governor).__name__ if self.governor else "None" 
+    return type(self).__name__ + "(" + g + ")" 
+
+  def init_governor(self, config, vmin, vmax, vround=None):
+    self.governor = Governor.from_config(config, vmin, vmax)
+    if self.governor and vround:
+      self.governor.val_round = vround
+
+  def co2val(self, co2):
+    if self.governor:
+      return self.governor.co2val(co2)
+    else:
+      return None
+
+class CPUEcoPolicy(EcoPolicy):
+  def __init__(self, config):
+    EcoPolicy.__init__(self, config)
 
   @classmethod
   def from_config(cls, config):
     c = config["policy"]["Control"].lower()
-    t = config["policy"]["Type"].lower()
     if c == "auto":
       if LinuxPowercapHelper.available():
         c = "power"
@@ -751,28 +822,18 @@ class EcoPolicy(object):
         print ("ERROR: Power management interface not found!")
         sys.exit(-1)
 
-    if c == "power" and t == "linear":
-      return LinearPowerEcoPolicy(config)
-    elif c == "frequency" and t == "linear":
-      return LinearFreqEcoPolicy(config)
+    if c == "power":
+      return CPUPowerEcoPolicy(config)
+    elif c == "frequency":
+      return CPUFreqEcoPolicy(config)
     elif c in OPTION_DISABLED or t in OPTION_DISABLED:
-      return NoEcoPolicy(config)
+      return None
     else:
-      raise ValueError("Unknown policy: " + [c, t])
+      raise ValueError("Unknown policy: " + c)
 
-class NoEcoPolicy(EcoPolicy):
+class CPUFreqEcoPolicy(CPUEcoPolicy):
   def __init__(self, config):
-    EcoPolicy.__init__(self, config)
-
-  def set_co2(self, co2):
-    pass
-    
-  def reset(self):
-    pass
-
-class FreqEcoPolicy(EcoPolicy):
-  def __init__(self, config):
-    EcoPolicy.__init__(self, config)
+    CPUEcoPolicy.__init__(self, config)
     self.driver = CpuFreqHelper.get_driver()
    
     if not self.driver:
@@ -782,38 +843,21 @@ class FreqEcoPolicy(EcoPolicy):
     self.fmin = CpuFreqHelper.get_hw_min_freq()
     self.fmax = CpuFreqHelper.get_hw_max_freq()
     self.fstart = CpuFreqHelper.get_gov_max_freq()
+    self.init_governor(config, self.fmin, self.fmax)
 
   def set_freq(self, freq):
-    if not self.debug:
+    if freq and not self.debug:
       #CpuPowerHelper.set_max_freq(freq)  
       CpuFreqHelper.set_gov_max_freq(freq)    
 
   def set_co2(self, co2):
-    self.freq = self.co2freq(co2)
+    self.freq = self.co2val(co2)
     self.set_freq(self.freq)
 
   def reset(self):
     self.set_freq(self.fmax)
 
-class LinearFreqEcoPolicy(FreqEcoPolicy):
-
-  def __init__(self, config):
-    FreqEcoPolicy.__init__(self, config)
-
-  def co2freq(self, co2):
-    if co2 >= self.co2max:
-      k = 0.0
-    elif co2 <= self.co2min:
-      k = 1.0
-    else:
-      k = 1.0 - float(co2 - self.co2min) / (self.co2max - self.co2min)
-  #  k = max(min(k, 1.0), 0.)
-    freq = self.fmin + (self.fmax - self.fmin) * k
-    freq = int(round(freq, self.freq_round))
-    return freq
-
-
-class PowerEcoPolicy(EcoPolicy):
+class CPUPowerEcoPolicy(EcoPolicy):
   def __init__(self, config):
     EcoPolicy.__init__(self, config)
     
@@ -824,34 +868,95 @@ class PowerEcoPolicy(EcoPolicy):
     self.pmax = LinuxPowercapHelper.get_package_hw_max_power(0)
     self.pmin = int(0.5*self.pmax)
     self.pstart = LinuxPowercapHelper.get_package_power_limit(0)
+    self.init_governor(config, self.pmin, self.pmax)
 
   def set_power(self, power_uw):
-    if not self.debug:
+    if power_uw and not self.debug:
       LinuxPowercapHelper.set_power_limit(power_uw)
 
   def set_co2(self, co2):
-    self.power = self.co2power(co2)
+    self.power = self.co2val(co2)
 #    print("Update policy co2 -> power: ", co2, "->", self.power)
     self.set_power(self.power)
 
   def reset(self):
     self.set_power(self.pmax)
 
-class LinearPowerEcoPolicy(PowerEcoPolicy):
+class GPUEcoPolicy(EcoPolicy):
   def __init__(self, config):
-    PowerEcoPolicy.__init__(self, config)
+    EcoPolicy.__init__(self, config)
 
-  def co2power(self, co2):
-    if co2 >= self.co2max:
-      k = 0.0
-    elif co2 <= self.co2min:
-      k = 1.0
+  @classmethod
+  def from_config(cls, config):
+    c = config["policy"]["Control"].lower()
+    if c == "auto":
+      if NvidiaGPUHelper.available():
+        c = "power"
+#      elif CpuFreqHelper.available():
+#        c = "frequency"
+      else:
+        return None
+
+    if c == "power":
+      return GPUPowerEcoPolicy(config)
+#    elif c == "frequency":
+#      return CPUFreqEcoPolicy(config)
+    elif c in OPTION_DISABLED or t in OPTION_DISABLED:
+      return None
     else:
-      k = 1.0 - float(co2 - self.co2min) / (self.co2max - self.co2min)
-    power = self.pmin + (self.pmax - self.pmin) * k
-    power = int(round(power, self.freq_round))
-    return power
+      raise ValueError("Unknown policy: " + c)
 
+class GPUPowerEcoPolicy(GPUEcoPolicy):
+  def __init__(self, config):
+    GPUEcoPolicy.__init__(self, config)
+    
+    if not NvidiaGPUHelper.available():
+      print ("ERROR: NVIDIA driver not found!")
+      sys.exit(-1)
+
+    plinfo = NvidiaGPUHelper.get_power_limit_all() 
+    self.pmin = plinfo[0][0]
+    self.pmax = plinfo[0][1]
+    self.pstart = plinfo[0][2]
+    self.init_governor(config, self.pmin, self.pmax, 0)
+
+  def set_power(self, power_w):
+    if power_w and not self.debug:
+      NvidiaGPUHelper.set_power_limit(power_w)
+
+  def set_co2(self, co2):
+    self.power = self.co2val(co2)
+#    print("Update policy co2 -> power: ", co2, "->", self.power)
+    self.set_power(self.power)
+
+  def reset(self):
+    self.set_power(self.pmax)
+    
+class EcoPolicyManager(object):
+  def __init__(self, config):
+    cpu_pol = CPUEcoPolicy.from_config(config)
+    gpu_pol = GPUEcoPolicy.from_config(config)
+    self.policies = []
+    if cpu_pol:
+      self.policies.append(cpu_pol)
+    if gpu_pol:
+      self.policies.append(gpu_pol)
+      
+  def info_string(self):
+    if self.policies:
+      s = [p.info_string() for p in self.policies]
+      return  ", ".join(s)
+    else:
+      return "None"
+    
+  def set_co2(self, co2):
+    for p in self.policies:
+      p.set_co2(co2)
+
+  def reset(self):
+    for p in self.policies:
+      p.reset()
+          
 class CO2History(object):
   def __init__(self, config):
     self.config = config
@@ -873,7 +978,6 @@ class EcoLogger(object):
     self.log_fname = config["general"]["logfile"]
     if self.log_fname in OPTION_DISABLED:
       self.log_fname = None
-    # self.row_fmt = '{0:<20}\t{1:>10}\t{2:>10}\t{3:>10}\t{4:>12.3f}\t{5:>12.3f}\t{6:>10.3f}\t{7:>10.3f}'
     self.row_fmt = '{:<20}\t{:>10}\t{:>10}\t{:>10}\t{:>12.3f}\t{:>12.3f}\t{:>12.3f}\t{:>10.3f}\t{:>10.3f}'
     self.header_fmt = "#" + self.row_fmt.replace(".3f", "")
     self.fmt = NAFormatter()
@@ -906,7 +1010,7 @@ class EcoFreq(object):
   def __init__(self, config):
     self.config = config
     self.co2provider = EmissionProvider.from_config(config)
-    self.co2policy = EcoPolicy.from_config(config)
+    self.co2policy = EcoPolicyManager(config)
     self.co2history = CO2History(config)
     self.co2logger = EcoLogger(config)
     self.monitor = MonitorManager(config)
@@ -919,7 +1023,7 @@ class EcoFreq(object):
   def info(self):
     print("Log file:    ", self.co2logger.log_fname)
     print("CO2 Provider:", type(self.co2provider).__name__, "(interval =", self.co2provider.interval, "sec)")
-    print("CO2 Policy:  ", type(self.co2policy).__name__)
+    print("CO2 Policy:  ", self.co2policy.info_string())
     print("Monitors:    ", self.monitor.info_string())
 
   def update_co2(self):
@@ -976,6 +1080,7 @@ def parse_args():
   parser = argparse.ArgumentParser()
   parser.add_argument("-c", dest="cfg_file", default=None, help="Config file name.")
   parser.add_argument("-d", dest="diag", action="store_true", help="Show system info.")
+  parser.add_argument("-g", dest="governor", default=None, help="Power governor (off = no power scaling).")
   parser.add_argument("-l", dest="log_fname", default=None, help="Log file name.")
   parser.add_argument("-t", dest="co2token", default=None, help="CO2Signal token.")
   args = parser.parse_args()
@@ -986,7 +1091,7 @@ def read_config(args):
               'emission' : { 'Provider'    : 'co2signal',
                              'Interval'    : '600'     },
               'policy'   : { 'Control'     : 'auto',    
-                             'Type'        : 'Linear', 
+                             'Governor'    : 'linear', 
                              'CO2Range'    : 'auto'    },        
               'monitor'  : { 'PowerSensor' : 'auto',    
                              'Interval'    : '5'       }        
@@ -1011,6 +1116,8 @@ def read_config(args):
        parser["co2signal"]["token"] = args.co2token
      if args.log_fname:
        parser["general"]["LogFile"] = args.log_fname
+     if args.governor:
+       parser["policy"]["Governor"] = args.governor
 
   return parser
 
@@ -1029,14 +1136,18 @@ def diag():
 
 if __name__ == '__main__':
 
-  args = parse_args()
+  try:
+    args = parse_args()
 
-  diag()
+    diag()
 
-  if not args.diag:
-    cfg = read_config(args)
-    ef = EcoFreq(cfg)
-    ef.info()
-    print("")
-    ef.spin()
+    if not args.diag:
+      cfg = read_config(args)
+      ef = EcoFreq(cfg)
+      ef.info()
+      print("")
+      ef.spin()
+  except PermissionError:
+    print (traceback.format_exc())
+    print("\nPlease run EcoFreq with root permissions!\n")
 
