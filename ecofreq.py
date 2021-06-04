@@ -14,6 +14,7 @@ import string
 import traceback
 from math import ceil
 
+HOMEDIR = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = "/var/log/ecofreq.log"
 OPTION_DISABLED = ["none", "off"]
 
@@ -126,6 +127,7 @@ class NvidiaGPUHelper(object):
 
 class CpuInfoHelper(object):
   CMD_LSCPU = "lscpu"
+  CPU_TDP_FILE = os.path.join(HOMEDIR, "cpu_tdp.csv")
   
   @classmethod
   def available(cls):
@@ -143,6 +145,28 @@ class CpuInfoHelper(object):
       return cpuinfo
     except CalledProcessError:
       return None  
+    
+  @classmethod
+  def get_tdp_uw(cls):
+    cpuinfo = cls.parse_lscpu()
+    mymodel = cpuinfo["Model name"]
+    mymodel = mymodel.split(" with ")[0]
+    mycpu_toks = []
+    for w in mymodel.split(" "):
+      if w.lower().endswith("-core"):
+        break
+      if w.lower() in ["processor"]:
+        continue
+      mycpu_toks.append(w)
+    mycpu = " ".join(mycpu_toks)  
+      
+    with open(cls.CPU_TDP_FILE) as f:
+      for line in f:
+        model, tdp = line.rstrip('\n').split(",")
+        if model == mycpu:
+          return float(tdp.rstrip("W")) * 1e6
+        
+    return None    
 
   @classmethod
   def info(cls):
@@ -374,6 +398,94 @@ class LinuxPowercapHelper(object):
     for pkg in cls.package_list(): 
       cls.set_package_power_limit(pkg, power, unit)
 
+# Code adapted from s-tui: 
+# https://github.com/amanusk/s-tui/commit/5c87727f5a2364697bfce84a0b688c1a6d2b3250
+class AMDRaplMsrHelper(object):
+  MSR_CPU_PATH="/dev/cpu/{0}/msr"
+  TOPOL_CPU_PATH="/sys/devices/system/cpu/cpu{0}/topology/physical_package_id"
+  CPU_MAX = 4096
+  UNIT_MSR = 0xC0010299
+  CORE_MSR = 0xC001029A
+  PACKAGE_MSR = 0xC001029B
+  ENERGY_UNIT_MASK = 0x1F00
+  ENERGY_STATUS_MASK = 0xffffffff
+  UJOULE_IN_JOULE = 1e6
+
+  @staticmethod
+  def read_msr(filename, register):
+    with open(filename, "rb") as f:
+      f.seek(register)
+      res = int.from_bytes(f.read(8), sys.byteorder)
+    return res
+
+  @classmethod
+  def package_list(cls):
+    pkg_list = set()
+    for cpu in range(cls.CPU_MAX):
+      fname = cls.TOPOL_CPU_PATH.format(cpu)
+      if not os.path.isfile(fname):
+        break
+      pkg = read_int_value(fname)
+      pkg_list.add(pkg)
+    return list(pkg_list)
+
+  @classmethod
+  def pkg_to_cpu(cls, pkg):
+    for cpu in range(cls.CPU_MAX):
+      fname = cls.TOPOL_CPU_PATH.format(cpu)
+      if not os.path.isfile(fname):
+        break;
+      if read_int_value(fname) == cpu:
+        return cpu
+    return None
+
+  @classmethod
+  def cpu_msr_file(cls, cpu):
+    return cls.MSR_CPU_PATH.format(cpu)
+
+  @classmethod
+  def pkg_msr_file(cls, pkg):
+    cpu = cls.pkg_to_cpu(pkg)
+    return cls.cpu_msr_file(cpu)
+  
+  @classmethod
+  def get_energy_factor(cls, filename):
+    unit_msr = cls.read_msr(filename, cls.UNIT_MSR)
+    energy_factor = 0.5 ** ((unit_msr & cls.ENERGY_UNIT_MASK) >> 8)
+    return energy_factor * cls.UJOULE_IN_JOULE
+
+  @classmethod
+  def get_energy_range(cls, filename):
+    return cls.ENERGY_STATUS_MASK * cls.get_energy_factor(filename)
+
+  @classmethod
+  def get_energy(cls, filename, register):
+    energy_factor = cls.get_energy_factor(filename)
+    package_msr = cls.read_msr(filename, register)
+    energy = package_msr * energy_factor
+    # print ("amd pkg_energy: ", energy)
+    return energy
+
+  @classmethod
+  def get_package_energy(cls, pkg):
+    filename = cls.pkg_msr_file(pkg)
+    return cls.get_energy(filename, cls.PACKAGE_MSR)
+
+  @classmethod
+  def get_core_energy(cls, cpu):
+    filename = cls.cpu_msr_file(cpu)
+    return cls.get_energy(filename, cls.CORE_MSR)
+
+  @classmethod
+  def get_package_energy_range(cls, pkg):
+    filename = cls.pkg_msr_file(pkg)
+    return cls.get_energy_range(filename)
+
+  @classmethod
+  def get_core_energy_range(cls, cpu):
+    filename = cls.cpu_msr_file(cpu)
+    return cls.get_energy_range(filename)
+
 class IPMIHelper(object):
   @classmethod
   def available(cls):
@@ -527,7 +639,7 @@ class EnergyMonitor(Monitor):
 
   @classmethod
   def from_config(cls, config):
-    sens_dict = {"rapl" : PowercapEnergyMonitor, "ipmi" : IPMIEnergyMonitor, "gpu" : GPUEnergyMonitor }
+    sens_dict = {"rapl" : PowercapEnergyMonitor, "amd_msr" : AMDMsrEnergyMonitor, "ipmi" : IPMIEnergyMonitor, "gpu" : GPUEnergyMonitor }
     p = config["monitor"].get("PowerSensor", "auto").lower()
     monitors = []
     if p in OPTION_DISABLED:
@@ -538,6 +650,8 @@ class EnergyMonitor(Monitor):
       else:
         if PowercapEnergyMonitor.available():
           monitors.append(PowercapEnergyMonitor(config))
+        elif AMDMsrEnergyMonitor.available():
+          monitors.append(AMDMsrEnergyMonitor(config))
         if NvidiaGPUHelper.available():
           monitors.append(GPUEnergyMonitor(config))
     else:
@@ -550,6 +664,7 @@ class EnergyMonitor(Monitor):
 
   def update_energy(self):
      energy = self.sample_energy()
+#     print("energy diff:", energy)
      self.total_energy += energy
      self.period_energy += energy
 
@@ -582,37 +697,25 @@ class NoEnergyMonitor(EnergyMonitor):
   def update_energy(self):
     pass
   
-class PowercapEnergyMonitor(EnergyMonitor):
+class RAPLEnergyMonitor(EnergyMonitor):
   UJOULE, JOULE, WH = 1, 1e6, 3600*1e6
   
-  @classmethod
-  def available(cls):
-    try:
-      energy = LinuxPowercapHelper.get_package_energy(0)
-      return energy > 0
-    except OSError:
-      return False
-     
   def __init__(self, config):
     EnergyMonitor.__init__(self, config)
-    self.pkg_list = LinuxPowercapHelper.package_list("psys")
-    if self.pkg_list:
-      self.psys_domain = True
-    else:
-      self.psys_domain = False
-      self.pkg_list = LinuxPowercapHelper.package_list("package-")
-      if self.pkg_list:
-        self.cpu_max_power_uw = LinuxPowercapHelper.get_package_hw_max_power(self.pkg_list[0])
-      self.pkg_list += LinuxPowercapHelper.package_list("dram")
-    self.last_energy = {}
-    self.energy_range = {}
-    for p in self.pkg_list:
-      self.last_energy[p] = 0
-      self.energy_range[p] = LinuxPowercapHelper.get_package_energy_range(p)
     c = config['powercap'] if 'powercap' in config else {}
     self.estimate_full_power = c.get('EstimateFullPower', True)
     self.syspower_coeff_const = c.get('FullPowerConstCoeff', 0.3)
     self.syspower_coeff_var = c.get('FullPowerVarCoeff', 0.25)
+    self.psys_domain = False
+    self.init_pkg_list()
+    self.init_energy()
+
+  def init_energy(self):
+    self.last_energy = {}
+    self.energy_range = {}
+    for p in self.pkg_list:
+      self.last_energy[p] = 0
+      self.energy_range[p] = self.get_package_energy_range(p)
     self.sample_energy()
     
   def full_system_energy(self, energy_diff):
@@ -626,7 +729,7 @@ class PowercapEnergyMonitor(EnergyMonitor):
   def sample_energy(self):
     energy_diff = 0
     for p in self.pkg_list:
-      new_energy = LinuxPowercapHelper.get_package_energy(p)
+      new_energy = self.get_package_energy(p)
       if new_energy >= self.last_energy[p]:
         diff_uj = new_energy - self.last_energy[p]
       else:
@@ -636,6 +739,60 @@ class PowercapEnergyMonitor(EnergyMonitor):
     energy_diff = self.full_system_energy(energy_diff)
     energy_diff_j = energy_diff / self.JOULE  
     return energy_diff_j
+  
+class PowercapEnergyMonitor(RAPLEnergyMonitor):
+
+  @classmethod
+  def available(cls):
+    try:
+      energy = LinuxPowercapHelper.get_package_energy(0)
+      return energy > 0
+    except OSError:
+      return False
+     
+  def __init__(self, config):
+    RAPLEnergyMonitor.__init__(self, config)
+
+  def init_pkg_list(self):
+    self.pkg_list = LinuxPowercapHelper.package_list("psys")
+    if self.pkg_list:
+      self.psys_domain = True
+    else:
+      self.psys_domain = False
+      self.pkg_list = LinuxPowercapHelper.package_list("package-")
+      if self.pkg_list:
+        self.cpu_max_power_uw = LinuxPowercapHelper.get_package_hw_max_power(self.pkg_list[0])
+      self.pkg_list += LinuxPowercapHelper.package_list("dram")
+  
+  def get_package_energy(self, pkg):
+    return LinuxPowercapHelper.get_package_energy(pkg)
+
+  def get_package_energy_range(self, pkg):
+    return LinuxPowercapHelper.get_package_energy_range(pkg)
+
+class AMDMsrEnergyMonitor(RAPLEnergyMonitor):
+
+  @classmethod
+  def available(cls):
+    try:
+      energy = AMDRaplMsrHelper.get_package_energy(0)
+      return energy > 0
+    except OSError:
+      return False
+
+  def __init__(self, config):
+    RAPLEnergyMonitor.__init__(self, config)
+    
+  def init_pkg_list(self):
+    self.pkg_list = AMDRaplMsrHelper.package_list()
+    self.cpu_max_power_uw = CpuInfoHelper.get_tdp_uw()
+
+  def get_package_energy(self, pkg):
+    return AMDRaplMsrHelper.get_package_energy(pkg)
+
+  def get_package_energy_range(self, pkg):
+    return AMDRaplMsrHelper.get_package_energy_range(pkg)
+
 
 class GPUEnergyMonitor(EnergyMonitor):
   def __init__(self, config):
@@ -1097,11 +1254,10 @@ def read_config(args):
                              'Interval'    : '5'       }        
              }
 
-  homedir = os.path.dirname(os.path.abspath(__file__))
   if args and args.cfg_file:
     cfg_file = args.cfg_file
   else:
-    cfg_file = os.path.join(homedir, "ecofreq.cfg")
+    cfg_file = os.path.join(HOMEDIR, "ecofreq.cfg")
 
   if not os.path.exists(cfg_file):
     print("ERROR: Config file not found: ", cfg_file)
