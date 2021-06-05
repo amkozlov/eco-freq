@@ -4,23 +4,24 @@ In many regions with a high share of renewables - such as Germany, Spain, UK or 
 
 And it gets even better if you have a [time-of-use electricity tarrif](https://www.irena.org/-/media/Files/IRENA/Agency/Publication/2019/Feb/IRENA_Innovation_ToU_tariffs_2019.pdf?la=en&hash=36658ADA8AA98677888DB2C184D1EE6A048C7470) or onsite solar generation: (being an) EcoFreq can save you a few cents ;)
 
-TODO add plot + more details
+![](https://github.com/amkozlov/eco-freq/blob/master/img/emap_all.png?raw=true)
+Source: [https://www.electricitymap.org]
 
-# Installation
+## Installation
 
-* Prerequisites:
- - Currently, only Linux systems are supported (tested with Ubuntu and CentOS)
- - EcoFreq daemon requires root privileges
- - For realtime CO2 tracking to work, please get your free API token here: https://co2signal.com/ 
- - If you want to use IPMI power measurements, please install [`ipmitool`](https://github.com/ipmitool/ipmitool)
+Prerequisites:
+ - Linux system (tested with Ubuntu and CentOS)
+ - root privileges (for EcoFreq daemon)
+ - [Free co2signal API token](https://co2signal.com/) (for realtime CO2 tracking) 
+ - (optional) [`ipmitool`](https://github.com/ipmitool/ipmitool) to use IPMI power measurements
 
-* Please run installer script which will create a config file and register `systemd` service for EcoFreq:
+Please run installer script which will create a config file and register `systemd` service for EcoFreq:
 
 ```
 sudo ./install.sh
 ```
 
-# Usage
+## Usage
 
 * For a quick test of EcoFreq on your system without configuration overhead (using mock CO2 provider): 
 
@@ -75,6 +76,6 @@ For a given time interval:
 ./ecostat.py --start 2021-05-18 --end 2021-05-20
 ``` 
 
-# Configuration
+## Configuration
 
 TODO
