@@ -4,7 +4,7 @@ In many regions with a high share of renewables - such as Germany, Spain, UK or 
 
 And it gets even better if you have a [time-of-use electricity tarrif](https://www.irena.org/-/media/Files/IRENA/Agency/Publication/2019/Feb/IRENA_Innovation_ToU_tariffs_2019.pdf?la=en&hash=36658ADA8AA98677888DB2C184D1EE6A048C7470) or onsite solar generation: (being an) EcoFreq can save you a few cents ;)
 
-![](https://github.com/amkozlov/eco-freq/blob/master/img/emap_all.png?raw=true)
+![](https://github.com/amkozlov/eco-freq/blob/main/img/emap_all.png?raw=true)
 Source: [https://www.electricitymap.org]
 
 ## Installation
