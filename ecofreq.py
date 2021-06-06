@@ -16,6 +16,7 @@ from math import ceil
 
 HOMEDIR = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = "/var/log/ecofreq.log"
+SHM_FILE = "/dev/shm/ecofreq"
 OPTION_DISABLED = ["none", "off"]
 
 def read_value(fname):
@@ -550,6 +551,13 @@ class MonitorManager(object):
     for m in self.monitors:
       if issubclass(type(m), EnergyMonitor):
         result += m.get_period_energy()
+    return result
+
+  def get_total_energy(self):
+    result = 0
+    for m in self.monitors:
+      if issubclass(type(m), EnergyMonitor):
+        result += m.get_total_energy()
     return result
 
   def get_period_avg_power(self):
@@ -1175,7 +1183,8 @@ class EcoFreq(object):
     # make sure that CO2 sampling interval is a multiple of energy sampling interval
     self.sample_interval = self.monitor.adjust_interval(self.co2provider.interval)
     # print("sampling intervals co2/energy:", self.co2provider.interval, self.sample_interval)
-    self.last_co2kwh = None
+    self.last_co2kwh = self.co2provider.get_co2()
+    self.total_co2 = 0.
     
   def info(self):
     print("Log file:    ", self.co2logger.log_fname)
@@ -1200,8 +1209,10 @@ class EcoFreq(object):
     avg_power = self.monitor.get_period_avg_power()
     if self.period_co2kwh:
       period_co2 = energy * self.period_co2kwh / 3.6e6
+      self.total_co2 += period_co2
     else:
       period_co2 = None
+    
     self.co2logger.print_row(self.period_co2kwh, avg_freq, energy, avg_power, period_co2) 
 
     # apply policy for new co2 reading
@@ -1210,6 +1221,15 @@ class EcoFreq(object):
       self.co2history.add_co2(co2)
         
     self.last_co2kwh = co2
+    
+  def write_shm(self):  
+    energy_j = str(round(self.monitor.get_total_energy(), 3))
+    co2_g = self.total_co2
+    if self.monitor.get_period_energy() > 0. and self.last_co2kwh:
+      co2_g += self.monitor.get_period_energy() * self.last_co2kwh / 3.6e6
+    co2_g = str(round(co2_g, 3))
+    with open(SHM_FILE, "w") as f:
+      f.write(" ".join([energy_j, co2_g]))
 
   def spin(self):
     try:
@@ -1227,6 +1247,7 @@ class EcoFreq(object):
         if duration % self.co2provider.interval == 0:
           self.update_co2()
           self.monitor.reset_period() 
+        self.write_shm()  
         elapsed = (datetime.now() - t1).total_seconds()
     except:
       e = sys.exc_info()
