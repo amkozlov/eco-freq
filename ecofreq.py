@@ -19,6 +19,8 @@ LOG_FILE = "/var/log/ecofreq.log"
 SHM_FILE = "/dev/shm/ecofreq"
 OPTION_DISABLED = ["none", "off"]
 
+JOULES_IN_KWH = 3.6e6
+
 def read_value(fname):
     with open(fname) as f:
       return f.readline()
@@ -1208,7 +1210,7 @@ class EcoFreq(object):
     energy = self.monitor.get_period_energy()
     avg_power = self.monitor.get_period_avg_power()
     if self.period_co2kwh:
-      period_co2 = energy * self.period_co2kwh / 3.6e6
+      period_co2 = energy * self.period_co2kwh / JOULES_IN_KWH
       self.total_co2 += period_co2
     else:
       period_co2 = None
@@ -1226,7 +1228,7 @@ class EcoFreq(object):
     energy_j = str(round(self.monitor.get_total_energy(), 3))
     co2_g = self.total_co2
     if self.monitor.get_period_energy() > 0. and self.last_co2kwh:
-      co2_g += self.monitor.get_period_energy() * self.last_co2kwh / 3.6e6
+      co2_g += self.monitor.get_period_energy() * self.last_co2kwh / JOULES_IN_KWH
     co2_g = str(round(co2_g, 3))
     with open(SHM_FILE, "w") as f:
       f.write(" ".join([energy_j, co2_g]))
@@ -1327,4 +1329,5 @@ if __name__ == '__main__':
   except PermissionError:
     print (traceback.format_exc())
     print("\nPlease run EcoFreq with root permissions!\n")
-
+    
+  os.remove(SHM_FILE)
