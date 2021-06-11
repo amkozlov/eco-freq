@@ -1329,5 +1329,6 @@ if __name__ == '__main__':
   except PermissionError:
     print (traceback.format_exc())
     print("\nPlease run EcoFreq with root permissions!\n")
-    
-  os.remove(SHM_FILE)
+
+  if os.path.exists(SHM_FILE):
+    os.remove(SHM_FILE)
