@@ -307,6 +307,10 @@ class LinuxPowercapHelper(object):
     return os.path.join(cls.package_path(pkg), fname)
 
   @classmethod
+  def read_package_int(cls, pkg, fname):
+    return read_int_value(cls.package_file(pkg, fname))
+
+  @classmethod
   def package_list(cls, domain="package-"):
     l = []
     pkg = 0
@@ -334,6 +338,10 @@ class LinuxPowercapHelper(object):
   @classmethod
   def available(cls):
     return os.path.isfile(cls.package_file(0, "constraint_0_power_limit_uw"))
+
+  @classmethod
+  def enabled(cls, pkg=0):
+    return cls.read_package_int(pkg, "enabled") != 0 
 
   @classmethod
   def info(cls):
@@ -365,19 +373,19 @@ class LinuxPowercapHelper(object):
 
   @classmethod
   def get_package_hw_max_power(cls, pkg, unit=UWATT):
-    return read_int_value(cls.package_file(pkg, "constraint_0_max_power_uw")) / unit 
+    return cls.read_package_int(pkg, "constraint_0_max_power_uw") / unit 
 
   @classmethod
   def get_package_power_limit(cls, pkg, unit=UWATT):
-    return read_int_value(cls.package_file(pkg, "constraint_0_power_limit_uw")) / unit 
+    return cls.read_package_int(pkg, "constraint_0_power_limit_uw") / unit 
 
   @classmethod
   def get_package_energy(cls, pkg):
-    return read_int_value(cls.package_file(pkg, "energy_uj")) 
+    return cls.read_package_int(pkg, "energy_uj") 
 
   @classmethod
   def get_package_energy_range(cls, pkg):
-    return read_int_value(cls.package_file(pkg, "max_energy_range_uj")) 
+    return cls.read_package_int(pkg, "max_energy_range_uj") 
 
   @classmethod
   def get_power_limit(cls, unit=UWATT):
@@ -981,7 +989,7 @@ class CPUEcoPolicy(EcoPolicy):
   def from_config(cls, config):
     c = config["policy"]["Control"].lower()
     if c == "auto":
-      if LinuxPowercapHelper.available():
+      if LinuxPowercapHelper.available() and LinuxPowercapHelper.enabled():
         c = "power"
       elif CpuFreqHelper.available():
         c = "frequency"
@@ -1030,6 +1038,12 @@ class CPUPowerEcoPolicy(EcoPolicy):
     
     if not LinuxPowercapHelper.available():
       print ("ERROR: RAPL powercap driver not found!")
+      sys.exit(-1)
+
+    if not LinuxPowercapHelper.enabled():
+      print ("ERROR: RAPL driver found, but powercap is disabled!")
+      print ("Please try to enable it as described here: https://askubuntu.com/a/1231490")
+      print ("If it does not work, switch to frequency control policy.")
       sys.exit(-1)
 
     self.pmax = LinuxPowercapHelper.get_package_hw_max_power(0)
