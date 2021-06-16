@@ -74,7 +74,7 @@ class GeoHelper(object):
     except:
       e = sys.exc_info()[0]
       print ("Exception: ", e)
-      lat, lon = None
+      lat, lon = None, None
     return lat, lon
 
 class NvidiaGPUHelper(object):
@@ -879,6 +879,11 @@ class CO2Signal(object):
       
     if self.co2country.lower().startswith("auto"):
       self.coord_lat, self.coord_lon = GeoHelper.get_my_coords()
+      if not self.coord_lat or not self.coord_lon:
+         print ("ERROR: Failed to autodetect location!")
+         print ("Please make sure you have internet connetion, or specify country code in the config file.")
+         sys.exit(-1)
+      
     self.update_url()
 
   def update_url(self):
@@ -1334,12 +1339,14 @@ if __name__ == '__main__':
 
     diag()
 
-    if not args.diag:
-      cfg = read_config(args)
-      ef = EcoFreq(cfg)
-      ef.info()
-      print("")
-      ef.spin()
+    if args.diag:
+      sys.exit()
+      
+    cfg = read_config(args)
+    ef = EcoFreq(cfg)
+    ef.info()
+    print("")
+    ef.spin()
   except PermissionError:
     print (traceback.format_exc())
     print("\nPlease run EcoFreq with root permissions!\n")
