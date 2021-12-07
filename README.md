@@ -77,7 +77,7 @@ CO2 emitted [kg]:            9.23712
 Use non-default log file (e.g., from a remote server):
 
 ```
-./ecostat.py -c myserver.log
+./ecostat.py -l myserver.log
 ```
 
 For a given time interval:

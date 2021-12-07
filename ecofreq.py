@@ -336,8 +336,11 @@ class LinuxPowercapHelper(object):
     return l
 
   @classmethod
-  def available(cls):
-    return os.path.isfile(cls.package_file(0, "constraint_0_power_limit_uw"))
+  def available(cls, readonly=False):
+    if readonly:  
+      return os.path.isfile(cls.package_file(0, "energy_uj"))
+    else:
+      return os.path.isfile(cls.package_file(0, "constraint_0_power_limit_uw"))
 
   @classmethod
   def enabled(cls, pkg=0):
@@ -345,7 +348,7 @@ class LinuxPowercapHelper(object):
 
   @classmethod
   def info(cls):
-    if cls.available():
+    if cls.available(True):
         outfmt = "RAPL {0} domains: count = {1}, hw_limit = {2} W, current_limit = {3} W" 
         cpus = cls.package_list()
         if len(cpus):
@@ -373,11 +376,17 @@ class LinuxPowercapHelper(object):
 
   @classmethod
   def get_package_hw_max_power(cls, pkg, unit=UWATT):
-    return cls.read_package_int(pkg, "constraint_0_max_power_uw") / unit 
+    if cls.available():
+      return cls.read_package_int(pkg, "constraint_0_max_power_uw") / unit 
+    else:
+      return None
 
   @classmethod
   def get_package_power_limit(cls, pkg, unit=UWATT):
-    return cls.read_package_int(pkg, "constraint_0_power_limit_uw") / unit 
+    if cls.available():
+      return cls.read_package_int(pkg, "constraint_0_power_limit_uw") / unit 
+    else:
+      return None
 
   @classmethod
   def get_package_energy(cls, pkg):
@@ -779,7 +788,10 @@ class PowercapEnergyMonitor(RAPLEnergyMonitor):
       self.psys_domain = False
       self.pkg_list = LinuxPowercapHelper.package_list("package-")
       if self.pkg_list:
-        self.cpu_max_power_uw = LinuxPowercapHelper.get_package_hw_max_power(self.pkg_list[0])
+        if LinuxPowercapHelper.available():
+          self.cpu_max_power_uw = LinuxPowercapHelper.get_package_hw_max_power(self.pkg_list[0])
+        else:
+          self.cpu_max_power_uw = CpuInfoHelper.get_tdp_uw()
       self.pkg_list += LinuxPowercapHelper.package_list("dram")
   
   def get_package_energy(self, pkg):
