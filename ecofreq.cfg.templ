@@ -16,3 +16,11 @@ CO2Range=150-500
 [monitor]
 PowerSensor=auto
 Interval=5
+
+[idle]
+#IdleMonitor=off
+LoadCutoff=0.05
+# 1 = 1min average, 2 = 5min, 3 = 15min
+LoadPeriod=1
+# Switch to low-energy standby mode (suspend) after x seconds of idling (TODO)
+#SuspendAfter=900

@@ -21,9 +21,13 @@ OPTION_DISABLED = ["none", "off"]
 
 JOULES_IN_KWH = 3.6e6
 
-def read_value(fname):
+def read_value(fname, field=0, sep=' '):
     with open(fname) as f:
-      return f.readline()
+      s = f.readline()
+      if field == 0:
+        return s
+      else:
+        return s.split(sep)[field]
 
 def read_int_value(fname):
   return int(read_value(fname))
@@ -536,6 +540,7 @@ class MonitorManager(object):
   def __init__(self, config):
     self.monitors = EnergyMonitor.from_config(config)
     self.monitors += FreqMonitor.from_config(config)
+    self.monitors += IdleMonitor.from_config(config)
     
   def info_string(self):
     s = []
@@ -591,6 +596,18 @@ class MonitorManager(object):
       if issubclass(type(m), CPUFreqMonitor):
         return m.get_period_avg_freq(unit)
     return None
+  
+  def get_period_idle(self):
+    for m in self.monitors:
+      if issubclass(type(m), IdleMonitor):
+        return m.get_period_idle()
+    return None
+
+  def get_stats(self):
+    stats = {}
+    for m in self.monitors:
+       stats.update(m.get_stats())
+    return stats
 
 class Monitor(object):
   def __init__(self, config):
@@ -609,6 +626,68 @@ class Monitor(object):
     self.update_impl() 
     self.period_samples += 1
     self.total_samples += 1
+    
+  # subclasses must override this
+  def get_stats(self):
+    return {}
+
+class IdleMonitor(Monitor):
+  CMD_SESSION_COUNT="w -h | wc -l"
+  LOADAVG_FILE="/proc/loadavg"
+  LOADAVG_M1=1
+  LOADAVG_M5=2
+  LOADAVG_M15=3
+  
+  @classmethod
+  def from_config(cls, config):
+    monitors = []
+    p = "on"
+    if config.has_section("idle"): 
+      p = config["idle"].get("IdleMonitor", p).lower()
+    if p not in OPTION_DISABLED:
+      monitors.append(IdleMonitor(config))
+    return monitors
+  
+  def __init__(self, config):
+    Monitor.__init__(self, config)
+    c = config['idle'] if 'idle' in config else {}
+    self.load_cutoff = float(c.get('LoadCutoff', 0.05))
+    self.load_period = int(c.get('LoadPeriod', 1))
+    if self.load_period not in [self.LOADAVG_M1, self.LOADAVG_M5, self.LOADAVG_M15]:
+      raise ValueError("IdleMonitor: Unknown load period: " + self.load_period)
+    self.suspend_after = c.get('SuspendAfter', None)
+    self.reset_period()
+
+  def reset_period(self):
+    Monitor.reset_period(self)
+    self.max_sessions = 0
+    self.max_load = 0.
+
+  def active_sessions(self):
+    out = check_output(self.CMD_SESSION_COUNT, shell=True, stderr=DEVNULL, universal_newlines=True)
+    return int(out)    
+
+  def active_load(self):
+    return float(read_value(self.LOADAVG_FILE, self.load_period))
+
+  def update_impl(self):
+    self.max_sessions = max(self.max_sessions, self.active_sessions())
+    self.max_load = max(self.max_load, self.active_load())
+    
+  def get_period_idle(self):
+    if self.max_sessions > 0 and self.max_load > self.load_cutoff:
+      return "ACTIVE"
+    elif self.max_sessions > 0:
+      return "SESSION"
+    elif self.max_load > self.load_cutoff:
+      return "LOAD"
+    else:
+      return "IDLE"
+    
+  def get_stats(self):
+    return {"State": self.get_period_idle(),
+            "MaxSessions": self.max_sessions,
+            "MaxLoad1": self.max_load }
 
 class FreqMonitor(Monitor):
   def __init__(self, config):
@@ -1176,9 +1255,21 @@ class EcoLogger(object):
     self.log_fname = config["general"]["logfile"]
     if self.log_fname in OPTION_DISABLED:
       self.log_fname = None
-    self.row_fmt = '{:<20}\t{:>10}\t{:>10}\t{:>10}\t{:>12.3f}\t{:>12.3f}\t{:>12.3f}\t{:>10.3f}\t{:>10.3f}'
-    self.header_fmt = "#" + self.row_fmt.replace(".3f", "")
     self.fmt = NAFormatter()
+    self.idle_fields = False
+    self.idle_debug = False
+    
+  def init_fields(self, monitors):
+    if monitors.get_period_idle():
+      self.idle_fields = True
+#      self.idle_debug = True
+    self.row_fmt = '{:<20}\t{:>10}\t{:>10}\t{:>10}\t{:>12.3f}\t{:>12.3f}\t{:>12.3f}\t{:>10.3f}\t{:>10.3f}'
+    if self.idle_fields:
+      self.row_fmt += "\t{:<10}"
+    if self.idle_debug:
+      self.row_fmt += "\t{:>10}\t{:>10.3f}"
+          
+    self.header_fmt = "#" + self.row_fmt.replace(".3f", "")
 
   def log(self, logstr):
     print (logstr)
@@ -1187,9 +1278,14 @@ class EcoLogger(object):
         logf.write(logstr + "\n")
 
   def print_header(self):
-    self.log(self.fmt.format(self.header_fmt, "Timestamp", "gCO2/kWh", "Fmax [Mhz]", "Favg [Mhz]", "CPU_Pmax [W]", "GPU_Pmax [W]", "SYS_Pavg [W]", "Energy [J]", "CO2 [g]"))
+    headers = ["Timestamp", "gCO2/kWh", "Fmax [Mhz]", "Favg [Mhz]", "CPU_Pmax [W]", "GPU_Pmax [W]", "SYS_Pavg [W]", "Energy [J]", "CO2 [g]"] 
+    if self.idle_fields:
+      headers += ["State"] 
+    if self.idle_debug:
+      headers += ["MaxSessions", "MaxLoad1"] 
+    self.log(self.fmt.format(self.header_fmt, *headers))
 
-  def print_row(self, co2kwh, avg_freq, energy, avg_power, co2period):
+  def print_row(self, co2kwh, avg_freq, energy, avg_power, co2period, idle, stats):
     ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     max_freq = cpu_max_power = gpu_max_power = None
     if CpuFreqHelper.available():
@@ -1198,7 +1294,13 @@ class EcoLogger(object):
       cpu_max_power = LinuxPowercapHelper.get_power_limit(LinuxPowercapHelper.WATT)
     if NvidiaGPUHelper.available():
       gpu_max_power = NvidiaGPUHelper.get_power_limit()
-    logstr = self.fmt.format(self.row_fmt, ts, safe_round(co2kwh), max_freq, safe_round(avg_freq), cpu_max_power, gpu_max_power, avg_power, energy, co2period)
+    cols = [ts, safe_round(co2kwh), max_freq, safe_round(avg_freq), cpu_max_power, gpu_max_power, avg_power, energy, co2period]
+    if self.idle_fields:
+      cols += [idle]
+    if self.idle_debug:
+      cols += [stats["MaxSessions"], stats["MaxLoad1"]]
+      
+    logstr = self.fmt.format(self.row_fmt, *cols)
 
 #    logstr += "\t" + str(self.co2history.min_co2()) + "\t" + str(self.co2history.max_co2())
 
@@ -1212,6 +1314,7 @@ class EcoFreq(object):
     self.co2history = CO2History(config)
     self.co2logger = EcoLogger(config)
     self.monitor = MonitorManager(config)
+    self.co2logger.init_fields(self.monitor)
     self.debug = False
     # make sure that CO2 sampling interval is a multiple of energy sampling interval
     self.sample_interval = self.monitor.adjust_interval(self.co2provider.interval)
@@ -1237,6 +1340,7 @@ class EcoFreq(object):
       self.period_co2kwh = self.last_co2kwh
 
     # prepare and print log row -> shows values for *past* interval!
+    idle = self.monitor.get_period_idle()
     avg_freq = self.monitor.get_period_cpu_avg_freq(CpuFreqHelper.MHZ)
     energy = self.monitor.get_period_energy()
     avg_power = self.monitor.get_period_avg_power()
@@ -1245,8 +1349,10 @@ class EcoFreq(object):
       self.total_co2 += period_co2
     else:
       period_co2 = None
+      
+    stats = self.monitor.get_stats()
     
-    self.co2logger.print_row(self.period_co2kwh, avg_freq, energy, avg_power, period_co2) 
+    self.co2logger.print_row(self.period_co2kwh, avg_freq, energy, avg_power, period_co2, idle, stats) 
 
     # apply policy for new co2 reading
     if co2:

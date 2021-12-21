@@ -20,6 +20,7 @@ FIELD_PMAX = "CPU_Pmax [W]"
 FIELD_PAVG = "SYS_Pavg [W]"
 FIELD_ENERGY = "Energy [J]"
 FIELD_CO2 = "CO2 [g]"
+FIELD_IDLE = "State"
 LOG_FIELDS = [FIELD_TS, FIELD_CO2KWH, FIELD_FMAX, FIELD_FAVG, FIELD_PMAX, FIELD_PAVG, FIELD_ENERGY, FIELD_CO2]
 
 JOULES_IN_KWH = 3.6e6
@@ -51,6 +52,9 @@ class EcoStat(object):
     self.timestamp_max = datetime.min
     self.duration = timedelta(seconds = 0)
     self.gap_duration = timedelta(seconds = 0)
+    self.idle_duration = timedelta(seconds = 0)
+    self.idle_energy = 0
+    self.idle_co2 = 0
     
     if args.ts_start:
       self.ts_start = parse_timestamp(args.ts_start, True)
@@ -75,12 +79,19 @@ class EcoStat(object):
 
     self.fields = LOG_FIELDS
     self.update_field_idx()
-    
+ 
+  def field_idx(self, field_name):
+    try:
+      return self.fields.index(field_name)
+    except ValueError:
+      return None
+   
   def update_field_idx(self):
-    self.time_idx = self.fields.index(FIELD_TS)
-    self.co2kwh_idx = self.fields.index(FIELD_CO2KWH)
-    self.energy_idx = self.fields.index(FIELD_ENERGY)
-    self.co2_idx = self.fields.index(FIELD_CO2)
+    self.time_idx = self.field_idx(FIELD_TS)
+    self.co2kwh_idx = self.field_idx(FIELD_CO2KWH)
+    self.energy_idx = self.field_idx(FIELD_ENERGY)
+    self.co2_idx = self.field_idx(FIELD_CO2)
+    self.idle_idx = self.field_idx(FIELD_IDLE)
 
   def parse_header(self, line):
     self.fields = [x.strip() for x in line.replace("#", "", 1).split("\t")]
@@ -93,6 +104,9 @@ class EcoStat(object):
     co2kwh_sum = 0
     co2_samples = 0
     co2_na_energy = 0
+    idle_na_energy = 0
+    duration_samples = 0
+    state_samples = 0
     with open(self.log_fname) as f:
       for line in f:
         if line.startswith("#"):
@@ -102,6 +116,8 @@ class EcoStat(object):
           continue
         toks = line.split("\t")
         
+        sample_idle = False
+        
         ts = datetime.strptime(toks[self.time_idx].strip(), TS_FORMAT)
         if ts < self.ts_start or ts > self.ts_end:
           continue
@@ -109,6 +125,12 @@ class EcoStat(object):
         self.timestamp_max = max(self.timestamp_max, ts)
         if last_ts:
           self.duration += (ts - last_ts)
+          duration_samples += 1
+          if self.idle_idx:
+            if toks[self.idle_idx].strip() == "IDLE":
+              sample_idle = True
+              self.idle_duration += (ts - last_ts)  
+            state_samples += 1
         elif gap_start_ts:
           self.gap_duration += (ts - gap_start_ts)
           gap_start_ts = None
@@ -116,6 +138,8 @@ class EcoStat(object):
           
         energy = float(toks[self.energy_idx]) 
         self.energy += energy 
+        if sample_idle:
+           self.idle_energy += energy
 
         co2kwh = toks[self.co2kwh_idx].strip()
         if co2kwh != "NA":
@@ -124,25 +148,52 @@ class EcoStat(object):
           co2_samples += 1
           self.co2kwh_min = min(self.co2kwh_min, co2kwh)
           self.co2kwh_max = max(self.co2kwh_max, co2kwh)
-          self.co2 += float(toks[self.co2_idx])
+          sample_co2 = float(toks[self.co2_idx])
         else:
+          sample_co2 = None
           co2_na_energy += energy
+          if sample_idle:
+            idle_na_energy += energy
+          
+        if sample_co2:
+           self.co2 += sample_co2
+           if sample_idle:
+             self.idle_co2 += sample_co2
+          
         self.samples += 1
         
     if co2_samples > 0:
       self.co2kwh_avg = co2kwh_sum / co2_samples
       self.co2 += self.co2kwh_avg * (co2_na_energy / JOULES_IN_KWH)
+      if idle_na_energy:
+        self.idle_co2 += self.co2kwh_avg * (idle_na_energy / JOULES_IN_KWH)
+    
+    if state_samples == duration_samples:
+      self.idle_prop = self.idle_duration / self.duration
+    else:
+      self.idle_prop = None
 
   def print_stats(self):
     if self.samples> 0:
       print ("Time interval:              ", self.timestamp_min, "-", self.timestamp_max)     
-      print ("Duration active:            ", self.duration)     
-      print ("Duration inactive:          ", self.gap_duration)     
+      print ("Monitoring active:          ", self.duration)     
+      print ("Monitoring inactive:        ", self.gap_duration)     
       print ("CO2 intensity range [g/kWh]:", round(self.co2kwh_min), "-", round(self.co2kwh_max))     
       print ("CO2 intensity mean [g/kWh]: ", round(self.co2kwh_avg))     
       print ("Energy consumed [J]:        ", round(self.energy, 3))     
       print ("Energy consumed [kWh]:      ", round(self.energy / JOULES_IN_KWH, 3))     
-      print ("CO2 emitted [kg]:           ", round(self.co2 / 1000., 6))  
+      print ("= electric car travel [km]: ", round(self.energy / JOULES_IN_KWH / 0.2))
+      print ("Total CO2 emitted [kg]:     ", round(self.co2 / 1000., 6))
+
+      if self.idle_duration:
+        print("")
+        print ("Idle time:                  ", self.idle_duration)     
+        if self.idle_prop:
+          print ("Idle time proportion:       ", round(self.idle_prop, 2))     
+        print ("Idle energy [kWh]:          ", round(self.idle_energy / JOULES_IN_KWH, 3))     
+        print ("Idle = e-car travel [km]:   ", round(self.idle_energy / JOULES_IN_KWH / 0.2))
+        print ("Idle CO2 [kg]:              ", round(self.idle_co2 / 1000., 6))     
+
     else:
       print ("No samples found in the given time interval!")
     print("")   
