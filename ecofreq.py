@@ -23,7 +23,7 @@ JOULES_IN_KWH = 3.6e6
 
 def read_value(fname, field=0, sep=' '):
     with open(fname) as f:
-      s = f.readline()
+      s = f.readline().rstrip("\n")
       if field == 0:
         return s
       else:
@@ -80,6 +80,45 @@ class GeoHelper(object):
       print ("Exception: ", e)
       lat, lon = None, None
     return lat, lon
+
+class SuspendHelper(object):
+  SYS_PWR="/sys/power/"
+  SYS_PWR_STATE=SYS_PWR+"state"
+  SYS_PWR_MEMSLEEP=SYS_PWR+"mem_sleep"
+  S2MEM="mem"
+  S2DISK="disk"
+  S2IDLE="s2idle"
+  S2RAM="deep"
+
+  @classmethod
+  def available(cls):
+    return os.path.isdir(cls.SYS_PWR)
+
+  @classmethod
+  def supported_modes(cls):
+    supported_modes = []
+    if cls.available():
+      supported_modes = read_value(cls.SYS_PWR_STATE).split(" ")
+      if cls.S2MEM in supported_modes:
+        supported_modes += read_value(cls.SYS_PWR_MEMSLEEP).split(" ")
+    return supported_modes
+
+  @classmethod
+  def info(cls):
+    print("Suspend-to-RAM available: ", end ="")
+    def_s2ram = "[" + cls.S2RAM + "]" 
+    if def_s2ram in cls.supported_modes():
+      print("YES")
+    else:
+      print("NO")
+    print("Suspend modes supported:", " ".join(cls.supported_modes()))
+
+  @classmethod
+  def suspend(cls, mode=S2RAM):
+    if mode == cls.S2RAM:
+      write_value(cls.SYS_PWR_MEMSLEEP, mode)
+      mode = cls.S2MEM
+    write_value(cls.SYS_PWR_STATE, mode)
 
 class NvidiaGPUHelper(object):
   CMD_NVSMI = "nvidia-smi"
@@ -602,6 +641,12 @@ class MonitorManager(object):
       if issubclass(type(m), IdleMonitor):
         return m.get_period_idle()
     return None
+  
+  def get_by_class(self, cls):
+    for m in self.monitors:
+      if issubclass(type(m), cls):
+        return m
+    return None
 
   def get_stats(self):
     stats = {}
@@ -655,13 +700,16 @@ class IdleMonitor(Monitor):
     self.load_period = int(c.get('LoadPeriod', 1))
     if self.load_period not in [self.LOADAVG_M1, self.LOADAVG_M5, self.LOADAVG_M15]:
       raise ValueError("IdleMonitor: Unknown load period: " + self.load_period)
-    self.suspend_after = c.get('SuspendAfter', None)
-    self.reset_period()
+    self.reset()
 
   def reset_period(self):
     Monitor.reset_period(self)
     self.max_sessions = 0
     self.max_load = 0.
+
+  def reset(self):
+    self.idle_duration = 0
+    self.reset_period()
 
   def active_sessions(self):
     out = check_output(self.CMD_SESSION_COUNT, shell=True, stderr=DEVNULL, universal_newlines=True)
@@ -673,6 +721,10 @@ class IdleMonitor(Monitor):
   def update_impl(self):
     self.max_sessions = max(self.max_sessions, self.active_sessions())
     self.max_load = max(self.max_load, self.active_load())
+    if self.get_period_idle() == "IDLE":
+      self.idle_duration += self.interval
+    else:
+      self.idle_duration = 0
     
   def get_period_idle(self):
     if self.max_sessions > 0 and self.max_load > self.load_cutoff:
@@ -1233,6 +1285,47 @@ class EcoPolicyManager(object):
   def reset(self):
     for p in self.policies:
       p.reset()
+      
+class IdlePolicy(object):
+  
+  @classmethod
+  def from_config(cls, config):
+    p = None
+    if "idle" in config:
+      if "SuspendAfter" in config["idle"]:
+        p = SuspendIdlePolicy(config)
+    return p
+    
+  def init_monitors(self, monman):
+    self.idlemon = monman.get_by_class(IdleMonitor)
+
+  def init_logger(self, logger):
+    self.log = logger
+    
+  def info_string(self):
+    return type(self).__name__ + " (timeout = " + str(self.idle_timeout) + " sec)"
+
+  def check_idle(self):
+    if self.idlemon and self.idlemon.idle_duration > self.idle_timeout:
+      duration = self.idlemon.idle_duration
+      self.idlemon.reset()
+      self.on_idle(duration)
+      return True
+    else:
+      return False
+
+  def on_idle(self, idle_duration):
+    pass
+  
+class SuspendIdlePolicy(IdlePolicy):
+  def __init__(self, config):
+   self.idle_timeout = int(config["idle"].get('SuspendAfter', 600))
+   self.mode = config["idle"].get('SuspendMode', SuspendHelper.S2RAM)
+
+  def on_idle(self, idle_duration):
+    if self.log:
+      self.log.print_cmd("suspend")
+    SuspendHelper.suspend(self.mode)   
           
 class CO2History(object):
   def __init__(self, config):
@@ -1306,6 +1399,11 @@ class EcoLogger(object):
 
     self.log(logstr)
 
+  def print_cmd(self, cmd):
+    ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    logstr = "##" + ts + " " + cmd 
+    self.log(logstr)
+
 class EcoFreq(object):
   def __init__(self, config):
     self.config = config
@@ -1316,6 +1414,11 @@ class EcoFreq(object):
     self.monitor = MonitorManager(config)
     self.co2logger.init_fields(self.monitor)
     self.debug = False
+    self.idle_policy = IdlePolicy.from_config(config)
+    if self.idle_policy:
+      self.idle_policy.init_monitors(self.monitor)
+      self.idle_policy.init_logger(self.co2logger)
+      
     # make sure that CO2 sampling interval is a multiple of energy sampling interval
     self.sample_interval = self.monitor.adjust_interval(self.co2provider.interval)
     # print("sampling intervals co2/energy:", self.co2provider.interval, self.sample_interval)
@@ -1326,6 +1429,7 @@ class EcoFreq(object):
     print("Log file:    ", self.co2logger.log_fname)
     print("CO2 Provider:", type(self.co2provider).__name__, "(interval =", self.co2provider.interval, "sec)")
     print("CO2 Policy:  ", self.co2policy.info_string())
+    print("Idle Policy: ", self.idle_policy.info_string())
     print("Monitors:    ", self.monitor.info_string())
 
   def update_co2(self):
@@ -1387,7 +1491,14 @@ class EcoFreq(object):
           self.update_co2()
           self.monitor.reset_period() 
         self.write_shm()  
+        if self.idle_policy:
+          if self.idle_policy.check_idle():
+            self.monitor.update(0)
+            self.monitor.reset_period()
+            self.co2logger.print_cmd("wakeup")
+            t1 = datetime.now()
         elapsed = (datetime.now() - t1).total_seconds()
+#        print("elapsed:", elapsed)
     except:
       e = sys.exc_info()
       print ("Exception: ", e)
@@ -1448,6 +1559,8 @@ def diag():
   NvidiaGPUHelper.info()
   print("")
   IPMIHelper.info()
+  print("")
+  SuspendHelper.info()
   print("")
 
 if __name__ == '__main__':

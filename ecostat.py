@@ -109,7 +109,10 @@ class EcoStat(object):
     state_samples = 0
     with open(self.log_fname) as f:
       for line in f:
-        if line.startswith("#"):
+        if line.startswith("##"):
+          last_ts = None
+          continue
+        elif line.startswith("#"):
           self.parse_header(line)
           gap_start_ts = last_ts
           last_ts = None
