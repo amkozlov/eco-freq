@@ -97,6 +97,13 @@ class EcoStat(object):
     self.fields = [x.strip() for x in line.replace("#", "", 1).split("\t")]
     self.update_field_idx()
 
+  def parse_command(self, line):
+    line = line.replace(" ", "\t")
+    toks = [x.strip() for x in line.replace("##", "", 1).split("\t")]
+    ts = datetime.strptime(toks[0].strip(), TS_FORMAT)
+    cmd = toks[1].lower()
+    return ts, cmd, toks[2:]
+
   def compute_stats(self):
     print("Loading data from log file:", self.log_fname, "\n")
     last_ts = None
@@ -110,7 +117,9 @@ class EcoStat(object):
     with open(self.log_fname) as f:
       for line in f:
         if line.startswith("##"):
-          last_ts = None
+          ts, cmd, args = self.parse_command(line)
+#          print(ts, cmd, args)
+          last_ts = ts if cmd in ["start"] else None
           continue
         elif line.startswith("#"):
           self.parse_header(line)

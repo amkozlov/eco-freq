@@ -11,7 +11,7 @@ TL;DR Just look at those awesome plots from [electricitymap.org](https://www.ele
 
 Prerequisites:
  - Linux system (tested with Ubuntu and CentOS)
- - Python3
+ - Python3.7+
  - root privileges (for EcoFreq daemon)
  - [Free co2signal API token](https://co2signal.com/) (for realtime CO2 tracking) 
  - (optional) [`ipmitool`](https://github.com/ipmitool/ipmitool) to use IPMI power measurements

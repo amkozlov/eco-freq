@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.7
 
 import sys, json 
 import urllib.request
@@ -12,7 +12,10 @@ import random
 import heapq
 import string
 import traceback
+import asyncio
+import json
 from math import ceil
+from inspect import isclass
 
 HOMEDIR = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = "/var/log/ecofreq.log"
@@ -120,6 +123,104 @@ class SuspendHelper(object):
       mode = cls.S2MEM
     write_value(cls.SYS_PWR_STATE, mode)
 
+class EcoFreqController(object):
+
+  def __init__(self, ef):
+    self.ef = ef
+    
+  def run_cmd(self, cmd, args={}):
+    res = {}
+    try:
+      if hasattr(self, cmd):
+        getattr(self, cmd)(res, args)
+        res['status'] = 'OK'
+      else:
+        res['status'] = 'ERROR'
+        res['error'] = 'Unknown command: ' + cmd
+    except:
+      res['status'] = 'ERROR'
+      res['error'] = 'Exception: ' + sys.exc_info()
+      
+    return res 
+
+  def info(self, res, args):
+    res['total_co2'] = self.ef.total_co2
+    res['co2policy'] = self.ef.co2policy.info_string()
+
+  def get_policy(self, res, args):
+    res['co2policy'] = self.ef.co2policy.get_config()
+
+  def set_policy(self, res, args):
+    self.ef.co2policy.set_config(args["co2policy"])
+    self.ef.co2logger.print_cmd("set_policy")
+
+class EcoServer(object):
+  IPC_PATH="/tmp/ecofreq-ipc"
+
+  def __init__(self, iface, config=None):
+    self.iface = iface
+  
+  async def spin(self):
+    self.serv = await asyncio.start_unix_server(self.on_connect, path=self.IPC_PATH)
+    os.chmod(self.IPC_PATH, 0o666)
+#    print(f"Server init")    
+#    async with self.serv:
+    await self.serv.serve_forever()    
+    
+  async def on_connect(self, reader, writer):
+    data = await reader.read(1024)
+    msg = data.decode()
+    # addr = writer.get_extra_info('peername')
+    
+    # print(f"Received {msg!r}")    
+
+    try:
+      req = json.loads(msg)
+      cmd = req['cmd']
+      args = req['args'] if 'args' in req else {}
+      res = self.iface.run_cmd(cmd, args)
+      response = json.dumps(res)
+    except:
+      response = "Invalid message"  
+    
+    writer.write(response.encode())
+    await writer.drain()
+    writer.close()
+
+class EcoClient(object):
+    
+  async def unix_send(self, message):
+      reader, writer = await asyncio.open_unix_connection(EcoServer.IPC_PATH)
+  
+#     print(f'Send: {message!r}')
+      writer.write(message.encode())
+      await writer.drain()
+  
+      data = await reader.read(1024)
+      # print(f'Received: {data.decode()!r}')
+  
+      writer.close()
+      
+      return data.decode()
+
+  def send_cmd(self, cmd, args=None):
+    obj = dict(cmd=cmd, args=args)
+    msg = json.dumps(obj)
+    resp = asyncio.run(self.unix_send(msg))
+    try:
+      return json.loads(resp)
+    except:
+      return dict(status='ERROR', error='Exception')
+  
+  def info(self):
+    return self.send_cmd('info')
+
+  def get_policy(self):
+    return self.send_cmd('get_policy')
+
+  def set_policy(self, policy):
+    return self.send_cmd('set_policy', policy)
+  
 class NvidiaGPUHelper(object):
   CMD_NVSMI = "nvidia-smi"
 
@@ -1065,18 +1166,22 @@ class MockCO2Provider(object):
 
 class Governor(object):
   def __init__(self, config, vmin, vmax):
-    r = config["policy"]["CO2Range"].lower()
+    r = config["co2range"].lower()
     if r == "auto":
       self.co2min = self.co2max = -1
     else:
       self.co2min, self.co2max = [int(x) for x in r.split("-")]
     self.val_round = 3
 
+  def get_config(self, config={}):
+    config["co2range"] = "{0}-{1}".format(self.co2min, self.co2max)
+    return config
+
   @classmethod
   def from_config(cls, config, vmin, vmax):
-    t = config["policy"]["Governor"].lower()
+    t = config["governor"].lower()
 
-    if t == "linear":
+    if t == "linear" or t == "lineargovernor":
       return LinearGovernor(config, vmin, vmax)
     elif t == "maxperf":
       return ConstantGovernor(config, vmax)
@@ -1122,7 +1227,14 @@ class EcoPolicy(object):
     self.governor = Governor.from_config(config, vmin, vmax)
     if self.governor and vround:
       self.governor.val_round = vround
-
+      
+  def get_config(self, config={}):
+    config["control"] = type(self).__name__
+    config["governor"] = type(self.governor).__name__ if self.governor else "none"
+    if self.governor:
+      self.governor.get_config(config)
+    return config
+  
   def co2val(self, co2):
     if self.governor:
       return self.governor.co2val(co2)
@@ -1135,7 +1247,18 @@ class CPUEcoPolicy(EcoPolicy):
 
   @classmethod
   def from_config(cls, config):
-    c = config["policy"]["Control"].lower()
+    if not config:
+      return None
+
+    # first, check if we have a specific EcoPolicy class
+    c = config["control"]
+    if c in globals(): 
+      cls = globals()[c]
+      if isclass(cls) and issubclass(cls, CPUEcoPolicy):
+        return cls(config)
+    
+    # otherwise, look for a generic policy type
+    c = c.lower()
     if c == "auto":
       if LinuxPowercapHelper.available() and LinuxPowercapHelper.enabled():
         c = "power"
@@ -1180,7 +1303,7 @@ class CPUFreqEcoPolicy(CPUEcoPolicy):
   def reset(self):
     self.set_freq(self.fmax)
 
-class CPUPowerEcoPolicy(EcoPolicy):
+class CPUPowerEcoPolicy(CPUEcoPolicy):
   def __init__(self, config):
     EcoPolicy.__init__(self, config)
     
@@ -1217,7 +1340,10 @@ class GPUEcoPolicy(EcoPolicy):
 
   @classmethod
   def from_config(cls, config):
-    c = config["policy"]["Control"].lower()
+    if not config:
+      return None
+    
+    c = config["control"].lower()
     if c == "auto":
       if NvidiaGPUHelper.available():
         c = "power"
@@ -1263,20 +1389,45 @@ class GPUPowerEcoPolicy(GPUEcoPolicy):
     
 class EcoPolicyManager(object):
   def __init__(self, config):
-    cpu_pol = CPUEcoPolicy.from_config(config)
-    gpu_pol = GPUEcoPolicy.from_config(config)
     self.policies = []
-    if cpu_pol:
-      self.policies.append(cpu_pol)
-    if gpu_pol:
-      self.policies.append(gpu_pol)
-      
+    cfg_dict = dict(config.items("policy")) if "policy" in config else None
+    self.set_config(cfg_dict)
+    
   def info_string(self):
     if self.policies:
       s = [p.info_string() for p in self.policies]
       return  ", ".join(s)
     else:
       return "None"
+
+  def set_config(self, cfg):
+    self.reset()
+    self.policies = []
+    if not cfg:
+      return
+    if "cpu" in cfg or "gpu" in cfg:
+      all_cfg = None
+    else:
+      all_cfg = cfg
+    cpu_cfg = cfg.get("cpu", all_cfg)
+    gpu_cfg = cfg.get("gpu", all_cfg)
+    cpu_pol = CPUEcoPolicy.from_config(cpu_cfg)
+    gpu_pol = GPUEcoPolicy.from_config(gpu_cfg)
+    if cpu_pol:
+      self.policies.append(cpu_pol)
+    if gpu_pol:
+      self.policies.append(gpu_pol)
+
+  def get_config(self):
+    res = {}
+    for p in self.policies:
+      domain = "global"
+      if issubclass(type(p), CPUEcoPolicy):
+        domain = "cpu"
+      elif issubclass(type(p), GPUEcoPolicy):
+        domain = "gpu"
+      res[domain] = p.get_config()
+    return res
     
   def set_co2(self, co2):
     for p in self.policies:
@@ -1401,7 +1552,7 @@ class EcoLogger(object):
 
   def print_cmd(self, cmd):
     ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-    logstr = "##" + ts + " " + cmd 
+    logstr = "##" + ts + "\t" + cmd.upper()
     self.log(logstr)
 
 class EcoFreq(object):
@@ -1418,6 +1569,9 @@ class EcoFreq(object):
     if self.idle_policy:
       self.idle_policy.init_monitors(self.monitor)
       self.idle_policy.init_logger(self.co2logger)
+
+    self.iface = EcoFreqController(self)
+    self.server = EcoServer(self.iface, config)
       
     # make sure that CO2 sampling interval is a multiple of energy sampling interval
     self.sample_interval = self.monitor.adjust_interval(self.co2provider.interval)
@@ -1474,16 +1628,18 @@ class EcoFreq(object):
     with open(SHM_FILE, "w") as f:
       f.write(" ".join([energy_j, co2_g]))
 
-  def spin(self):
+  async def spin(self):
     try:
       self.co2logger.print_header()
+      self.co2logger.print_cmd("start")
       duration = 0
       self.monitor.reset_period() 
       elapsed = 0
       while 1:
         to_sleep = max(self.sample_interval - elapsed, 0)
         #print("to_sleep:", to_sleep)
-        time.sleep(to_sleep)
+#        time.sleep(to_sleep)
+        await asyncio.sleep(to_sleep)
         duration += self.sample_interval
         t1 = datetime.now()
         self.monitor.update(duration)
@@ -1503,6 +1659,12 @@ class EcoFreq(object):
       e = sys.exc_info()
       print ("Exception: ", e)
       self.co2policy.reset()
+      
+  async def main(self):
+    spins = [self.server.spin(), self.spin()]
+    tasks = [asyncio.create_task(t) for t in spins]
+    for t in tasks:
+      await t
 
 def parse_args():
   parser = argparse.ArgumentParser()
@@ -1562,7 +1724,7 @@ def diag():
   print("")
   SuspendHelper.info()
   print("")
-
+  
 if __name__ == '__main__':
 
   try:
@@ -1577,10 +1739,12 @@ if __name__ == '__main__':
     ef = EcoFreq(cfg)
     ef.info()
     print("")
-    ef.spin()
+    asyncio.run(ef.main())
   except PermissionError:
-    print (traceback.format_exc())
+    print(traceback.format_exc())
     print("\nPlease run EcoFreq with root permissions!\n")
-
+  except:
+    print("Exception:", traceback.format_exc())
+    
   if os.path.exists(SHM_FILE):
     os.remove(SHM_FILE)
