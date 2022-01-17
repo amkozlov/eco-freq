@@ -18,7 +18,7 @@ def set_governor(gov):
     policy = ec.get_policy()
     old_gov = policy["co2policy"]["cpu"]["governor"]
     policy["co2policy"]["cpu"]["governor"] = gov
-    print(policy)
+#    print(policy)
     ret = ec.set_policy(policy)
     return old_gov
   except ConnectionRefusedError:
@@ -36,6 +36,10 @@ if __name__ == '__main__':
   cmdline_start = 1
   if len(sys.argv) > 3 and sys.argv[1] == "-p":
     gov = sys.argv[2]
+    if gov in ["off", "disabled"]:
+      gov = "none"
+    elif gov in ["on", "enabled", "default", "eco"]:
+      gov = "linear"    
     old_gov = set_governor(gov)
     cmdline_start += 2
   else:
