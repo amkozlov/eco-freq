@@ -151,7 +151,14 @@ class EcoFreqController(object):
     res['co2policy'] = self.ef.co2policy.get_config()
 
   def set_policy(self, res, args):
-    self.ef.co2policy.set_config(args["co2policy"])
+    old_cfg = dict(self.ef.config["policy"]) 
+#    print(old_cfg)
+    new_cfg = {}
+    for domain in args["co2policy"].keys():
+      new_cfg[domain] = old_cfg
+      new_cfg[domain].update(args["co2policy"][domain])
+#    print(new_cfg)
+    self.ef.co2policy.set_config(new_cfg)
     self.ef.co2logger.print_cmd("set_policy")
 
 class EcoServer(object):
@@ -1583,7 +1590,7 @@ class EcoFreq(object):
     print("Log file:    ", self.co2logger.log_fname)
     print("CO2 Provider:", type(self.co2provider).__name__, "(interval =", self.co2provider.interval, "sec)")
     print("CO2 Policy:  ", self.co2policy.info_string())
-    print("Idle Policy: ", self.idle_policy.info_string())
+    print("Idle Policy: ", self.idle_policy.info_string() if self.idle_policy else "None")
     print("Monitors:    ", self.monitor.info_string())
 
   def update_co2(self):
