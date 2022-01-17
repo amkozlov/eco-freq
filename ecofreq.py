@@ -159,17 +159,28 @@ class EcoFreqController(object):
       new_cfg[domain].update(args["co2policy"][domain])
 #    print(new_cfg)
     self.ef.co2policy.set_config(new_cfg)
+    if self.ef.last_co2kwh:
+      self.ef.co2policy.set_co2(self.ef.last_co2kwh)
     self.ef.co2logger.print_cmd("set_policy")
 
 class EcoServer(object):
   IPC_PATH="/tmp/ecofreq-ipc"
 
   def __init__(self, iface, config=None):
+    import grp
     self.iface = iface
+    self.fmod = 0o666
+    gname = "ecofreq"
+    if config and "server" in config:
+      gname = config["server"].get("filegroup", gname)
+      self.fmod = 0o660
+    self.gid = grp.getgrnam(gname).gr_gid
   
   async def spin(self):
     self.serv = await asyncio.start_unix_server(self.on_connect, path=self.IPC_PATH)
-    os.chmod(self.IPC_PATH, 0o666)
+    os.chown(self.IPC_PATH, -1, self.gid)
+    os.chmod(self.IPC_PATH, self.fmod)
+    
 #    print(f"Server init")    
 #    async with self.serv:
     await self.serv.serve_forever()    
