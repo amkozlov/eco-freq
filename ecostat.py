@@ -8,8 +8,9 @@ import configparser
 import argparse
 import string
 
+from ecofreq import TS_FORMAT, JOULES_IN_KWH
+
 LOG_FILE = "/var/log/ecofreq.log"
-TS_FORMAT = "%Y-%m-%dT%H:%M:%S"
 DATE_FORMAT = "%Y-%m-%d"
 
 FIELD_TS = "Timestamp"
@@ -22,8 +23,6 @@ FIELD_ENERGY = "Energy [J]"
 FIELD_CO2 = "CO2 [g]"
 FIELD_IDLE = "State"
 LOG_FIELDS = [FIELD_TS, FIELD_CO2KWH, FIELD_FMAX, FIELD_FAVG, FIELD_PMAX, FIELD_PAVG, FIELD_ENERGY, FIELD_CO2]
-
-JOULES_IN_KWH = 3.6e6
 
 def parse_timestamp(str, exit_on_error=False):
   ts = None

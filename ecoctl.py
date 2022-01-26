@@ -1,12 +1,13 @@
-#!/usr/bin/env python3.7
+#!/usr/bin/env python3
 
 import os
 import sys
 import argparse
+from datetime import datetime, timedelta
 from subprocess import call,STDOUT,DEVNULL,CalledProcessError
 
-from ecofreq import SHM_FILE, JOULES_IN_KWH
-from ecofreq import EcoClient
+from ecofreq import SHM_FILE, JOULES_IN_KWH, TS_FORMAT
+from ecofreq import EcoClient, EcoFreq
 
 def parse_args():
   parser = argparse.ArgumentParser()
@@ -18,8 +19,25 @@ def parse_args():
 
 def cmd_info(args):
   info = ec.info()
-  print("CO2 policy:    ", info["co2policy"])
-  print("CO2 total [kg]:", round(float(info["total_co2"]) / 1000., 6))
+  print("EcoFreq is RUNNING")
+  print("")
+  print("= CONFIGURATION =")
+  EcoFreq.print_info(info)
+  print("")
+  print("= STATUS =")
+  print("State:                 ", info["idle_state"])
+  if info["idle_state"] == "IDLE":
+    print("Idle duration:         ", timedelta(seconds = int(info["idle_duration"])))
+  print("Load:                  ", info["idle_load"])
+  print("Power [W]:             ", round(info["avg_power"]))
+  print("CO2 intensity [g/kWh]: ", info["last_co2kwh"])     
+  print("")
+  print("= STATISTICS =")
+  ts_start = datetime.strptime(info["start_date"], TS_FORMAT)
+  uptime = str(datetime.now().replace(microsecond=0) - ts_start)
+  print("Running since:         ", info["start_date"], "(up " + uptime + ")")     
+  print("Energy consumed [kWh]: ", round(float(info["total_energy_j"]) / JOULES_IN_KWH, 3))     
+  print("CO2 total [kg]:        ", round(float(info["total_co2"]) / 1000., 6))
 
 def policy_is_enabled(pol, domain="cpu"):
   if not domain in pol["co2policy"]:

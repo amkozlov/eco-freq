@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.7
+#!/usr/bin/env python3
 
 import sys, json 
 import urllib.request
@@ -23,6 +23,8 @@ SHM_FILE = "/dev/shm/ecofreq"
 OPTION_DISABLED = ["none", "off"]
 
 JOULES_IN_KWH = 3.6e6
+
+TS_FORMAT = "%Y-%m-%dT%H:%M:%S"
 
 def read_value(fname, field=0, sep=' '):
     with open(fname) as f:
@@ -144,8 +146,15 @@ class EcoFreqController(object):
     return res 
 
   def info(self, res, args):
+    res.update(self.ef.get_info())
+    m_stats = self.ef.monitor.get_stats()
+    res['idle_state'] = m_stats["LastState"]
+    res['idle_load'] = m_stats["LastLoad"]
+    res['idle_duration'] = m_stats["IdleDuration"]
+    res['avg_power'] = self.ef.monitor.get_last_avg_power()
+    res['total_energy_j'] = self.ef.monitor.get_total_energy()
     res['total_co2'] = self.ef.total_co2
-    res['co2policy'] = self.ef.co2policy.info_string()
+    res['last_co2kwh'] = self.ef.last_co2kwh
 
   def get_policy(self, res, args):
     res['co2policy'] = self.ef.co2policy.get_config()
@@ -174,11 +183,15 @@ class EcoServer(object):
     if config and "server" in config:
       gname = config["server"].get("filegroup", gname)
       self.fmod = 0o660
-    self.gid = grp.getgrnam(gname).gr_gid
+    try:
+      self.gid = grp.getgrnam(gname).gr_gid
+    except KeyError:
+      self.gid = -1
   
   async def spin(self):
     self.serv = await asyncio.start_unix_server(self.on_connect, path=self.IPC_PATH)
-    os.chown(self.IPC_PATH, -1, self.gid)
+    if self.gid >= 0:
+      os.chown(self.IPC_PATH, -1, self.gid)
     os.chmod(self.IPC_PATH, self.fmod)
     
 #    print(f"Server init")    
@@ -749,6 +762,13 @@ class MonitorManager(object):
         result += m.get_period_avg_power()
     return result
 
+  def get_last_avg_power(self):
+    result = 0
+    for m in self.monitors:
+      if issubclass(type(m), EnergyMonitor):
+        result += m.get_last_avg_power()
+    return result
+
   def get_period_cpu_avg_freq(self, unit):
     for m in self.monitors:
       if issubclass(type(m), CPUFreqMonitor):
@@ -828,6 +848,8 @@ class IdleMonitor(Monitor):
 
   def reset(self):
     self.idle_duration = 0
+    self.last_sessions = 0
+    self.last_load = 0.
     self.reset_period()
 
   def active_sessions(self):
@@ -838,27 +860,39 @@ class IdleMonitor(Monitor):
     return float(read_value(self.LOADAVG_FILE, self.load_period))
 
   def update_impl(self):
-    self.max_sessions = max(self.max_sessions, self.active_sessions())
-    self.max_load = max(self.max_load, self.active_load())
+    self.last_sessions = self.active_sessions()
+    self.last_load = self.active_load()
+    self.max_sessions = max(self.max_sessions, self.last_sessions)
+    self.max_load = max(self.max_load, self.last_load)
     if self.get_period_idle() == "IDLE":
       self.idle_duration += self.interval
     else:
       self.idle_duration = 0
     
-  def get_period_idle(self):
-    if self.max_sessions > 0 and self.max_load > self.load_cutoff:
+  def get_state(self, sessions, load):
+    if sessions > 0 and load > self.load_cutoff:
       return "ACTIVE"
-    elif self.max_sessions > 0:
+    elif sessions > 0:
       return "SESSION"
-    elif self.max_load > self.load_cutoff:
+    elif load > self.load_cutoff:
       return "LOAD"
     else:
       return "IDLE"
+
+  def get_period_idle(self):
+    return self.get_state(self.max_sessions, self.max_load)
+
+  def get_last_idle(self):
+    return self.get_state(self.last_sessions, self.last_load)
     
   def get_stats(self):
     return {"State": self.get_period_idle(),
+            "LastState": self.get_last_idle(),
             "MaxSessions": self.max_sessions,
-            "MaxLoad1": self.max_load }
+            "LastSessions": self.last_sessions,
+            "MaxLoad": self.max_load,
+            "LastLoad": self.last_load,
+            "IdleDuration": self.idle_duration }
 
 class FreqMonitor(Monitor):
   def __init__(self, config):
@@ -912,6 +946,7 @@ class EnergyMonitor(Monitor):
     Monitor.__init__(self, config)
     self.total_energy = 0
     self.period_energy = 0
+    self.last_avg_power = 0
     self.monitor_freq = CpuFreqHelper.available()
 
   @classmethod
@@ -942,6 +977,7 @@ class EnergyMonitor(Monitor):
   def update_energy(self):
      energy = self.sample_energy()
 #     print("energy diff:", energy)
+     self.last_avg_power = energy / self.interval
      self.total_energy += energy
      self.period_energy += energy
 
@@ -953,6 +989,9 @@ class EnergyMonitor(Monitor):
 
   def get_total_energy(self):
     return self.total_energy
+
+  def get_last_avg_power(self):
+    return self.last_avg_power
 
   def get_period_avg_power(self):
     if self.period_samples:
@@ -1124,8 +1163,12 @@ class EmissionProvider(object):
       return prov_dict[p](config)  
     else:
       raise ValueError("Unknown emission provider: " + p)
+    
+  def info_string(self):
+    return type(self).__name__ + " (interval = " + str(self.interval) + " sec)"
 
-class CO2Signal(object):
+
+class CO2Signal(EmissionProvider):
   URL_BASE = "https://api.co2signal.com/v1/latest?"
   URL_COUNTRY = URL_BASE + "countryCode={0}"
   URL_COORD = URL_BASE + "lat={0}&lon={1}"
@@ -1169,7 +1212,7 @@ class CO2Signal(object):
       co2 = None
     return co2
 
-class MockCO2Provider(object):
+class MockCO2Provider(EmissionProvider):
   def __init__(self, config):
     EmissionProvider.__init__(self, config)
     if 'mock' in config:
@@ -1548,7 +1591,7 @@ class EcoLogger(object):
     self.log(self.fmt.format(self.header_fmt, *headers))
 
   def print_row(self, co2kwh, avg_freq, energy, avg_power, co2period, idle, stats):
-    ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    ts = datetime.now().strftime(TS_FORMAT)
     max_freq = cpu_max_power = gpu_max_power = None
     if CpuFreqHelper.available():
       max_freq = round(CpuFreqHelper.get_gov_max_freq(unit=CpuFreqHelper.MHZ))
@@ -1569,7 +1612,7 @@ class EcoLogger(object):
     self.log(logstr)
 
   def print_cmd(self, cmd):
-    ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    ts = datetime.now().strftime(TS_FORMAT)
     logstr = "##" + ts + "\t" + cmd.upper()
     self.log(logstr)
 
@@ -1596,14 +1639,28 @@ class EcoFreq(object):
     # print("sampling intervals co2/energy:", self.co2provider.interval, self.sample_interval)
     self.last_co2kwh = self.co2provider.get_co2()
     self.total_co2 = 0.
+    self.start_date = datetime.now()
     
-  def info(self):
-    print("Log file:    ", self.co2logger.log_fname)
-    print("CO2 Provider:", type(self.co2provider).__name__, "(interval =", self.co2provider.interval, "sec)")
-    print("CO2 Policy:  ", self.co2policy.info_string())
-    print("Idle Policy: ", self.idle_policy.info_string() if self.idle_policy else "None")
-    print("Monitors:    ", self.monitor.info_string())
+  def get_info(self):
+    return {"logfile": self.co2logger.log_fname,
+            "co2provider": self.co2provider.info_string(),
+            "co2policy": self.co2policy.info_string(),
+            "idlepolicy":  self.idle_policy.info_string() if self.idle_policy else "None",
+            "monitors": self.monitor.info_string(),
+            "start_date": self.start_date.strftime(TS_FORMAT) }
 
+  @classmethod
+  def print_info(cls, info):
+    print("Log file:    ", info["logfile"])
+    print("CO2 Provider:", info["co2provider"])
+    print("CO2 Policy:  ", info["co2policy"])
+    print("Idle Policy: ", info["idlepolicy"])
+    print("Monitors:    ", info["monitors"])
+
+  def info(self):
+    info = self.get_info()
+    EcoFreq.print_info(info)
+    
   def update_co2(self):
     # fetch new co2 intensity 
     co2 = self.co2provider.get_co2()
@@ -1750,19 +1807,17 @@ if __name__ == '__main__':
 
     diag()
 
-    if args.diag:
-      sys.exit()
-      
-    cfg = read_config(args)
-    ef = EcoFreq(cfg)
-    ef.info()
-    print("")
-    asyncio.run(ef.main())
+    if not args.diag:
+      cfg = read_config(args)
+      ef = EcoFreq(cfg)
+      ef.info()
+      print("")
+      asyncio.run(ef.main())
   except PermissionError:
     print(traceback.format_exc())
     print("\nPlease run EcoFreq with root permissions!\n")
   except:
     print("Exception:", traceback.format_exc())
     
-  if os.path.exists(SHM_FILE):
+  if not args.diag and os.path.exists(SHM_FILE):
     os.remove(SHM_FILE)
