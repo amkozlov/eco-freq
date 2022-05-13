@@ -2,6 +2,7 @@
 
 import os
 import sys
+import time
 from subprocess import call,STDOUT,DEVNULL,CalledProcessError
 
 from ecofreq import SHM_FILE, JOULES_IN_KWH
@@ -48,9 +49,13 @@ if __name__ == '__main__':
   cmdline = sys.argv[cmdline_start:]
   
   start_joules, start_co2 = read_shm()
+  
+  start_time = time.time()
 
 #  call(cmdline, shell=True)
   call(cmdline)
+
+  end_time = time.time()
 
   end_joules, end_co2 = read_shm()
   
@@ -60,8 +65,13 @@ if __name__ == '__main__':
   diff_joules = end_joules - start_joules
   diff_kwh = diff_joules / JOULES_IN_KWH
   diff_co2 = end_co2 - start_co2
+  
+  diff_time = end_time - start_time  
+  avg_pwr = diff_joules / diff_time
 
   print("")
+  print("time_s:    ", round(diff_time, 3))
+  print("pwr_avg_w: ", round(avg_pwr, 3))
   print("energy_j:  ", round(diff_joules, 3))
   print("energy_kwh:", round(diff_kwh, 3))
   print("co2_g:     ", round(diff_co2, 3))
