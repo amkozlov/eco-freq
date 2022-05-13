@@ -1237,7 +1237,6 @@ class MockCO2Provider(EmissionProvider):
             toks = line.split("\t")
             co2 = None if toks[fnum].strip() == "NA" else float(toks[fnum])
             self.co2queue.append(co2)
-        print(self.co2queue)
     else:
       self.co2queue = None
 
@@ -1258,7 +1257,18 @@ class Governor(object):
     else:
       self.co2min, self.co2max = [int(x) for x in r.split("-")]
     self.val_round = 3
-
+    
+  def info_args(self):
+    return []
+  
+  def info_string(self):
+    args = [type(self).__name__]
+    args += self.info_args()
+    return ":".join(args)
+  
+  def round_val(self, val):
+    return int(round(val, self.val_round))
+  
   def get_config(self, config={}):
     config["co2range"] = "{0}-{1}".format(self.co2min, self.co2max)
     return config
@@ -1271,6 +1281,18 @@ class Governor(object):
       return LinearGovernor(config, vmin, vmax)
     elif t == "maxperf":
       return ConstantGovernor(config, vmax)
+    elif t.startswith("const"):
+      toks = t.split(":")
+      val = vmax
+      if len(toks) > 1:
+        if toks[1].endswith("%"):
+          p = float(toks[1].strip("%")) / 100
+        else:
+          p = float(toks[1])
+        val = vmax * p
+        if val > vmax or val < vmin:
+          raise ValueError("Constant governor parameter out-of-bounds: " + toks[1])   
+      return ConstantGovernor(config, val)
     elif t in OPTION_DISABLED:
       return None
     else:
@@ -1280,6 +1302,9 @@ class ConstantGovernor(Governor):
   def __init__(self, config, val):
     Governor.__init__(self, config, val, val)
     self.val = val
+    
+  def info_args(self):
+    return [str(self.round_val(self.val))] 
 
   def co2val(self, co2):
     return self.val
@@ -1289,6 +1314,9 @@ class LinearGovernor(Governor):
     Governor.__init__(self, config, vmin, vmax)
     self.vmin = vmin
     self.vmax = vmax
+
+  def info_args(self):
+    return [str(self.round_val(self.vmin)), str(self.round_val(self.vmax))] 
 
   def co2val(self, co2):
     if co2 >= self.co2max:
@@ -1306,7 +1334,7 @@ class EcoPolicy(object):
     self.debug = False
 
   def info_string(self):
-    g = type(self.governor).__name__ if self.governor else "None" 
+    g = self.governor.info_string() if self.governor else "None" 
     return type(self).__name__ + "(" + g + ")" 
 
   def init_governor(self, config, vmin, vmax, vround=None):
@@ -1486,10 +1514,13 @@ class EcoPolicyManager(object):
     else:
       return "None"
 
-  def set_config(self, cfg):
+  def clear(self):
     self.reset()
     self.policies = []
+
+  def set_config(self, cfg):
     if not cfg:
+      self.clear()
       return
     if "cpu" in cfg or "gpu" in cfg:
       all_cfg = None
@@ -1499,6 +1530,7 @@ class EcoPolicyManager(object):
     gpu_cfg = cfg.get("gpu", all_cfg)
     cpu_pol = CPUEcoPolicy.from_config(cpu_cfg)
     gpu_pol = GPUEcoPolicy.from_config(gpu_cfg)
+    self.clear()
     if cpu_pol:
       self.policies.append(cpu_pol)
     if gpu_pol:
