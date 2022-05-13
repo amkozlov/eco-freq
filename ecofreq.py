@@ -16,6 +16,7 @@ import asyncio
 import json
 from math import ceil
 from inspect import isclass
+from _collections import deque
 
 HOMEDIR = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = "/var/log/ecofreq.log"
@@ -1215,12 +1216,36 @@ class CO2Signal(EmissionProvider):
 class MockCO2Provider(EmissionProvider):
   def __init__(self, config):
     EmissionProvider.__init__(self, config)
+    self.co2file = None
+    co2range = '100-800'
     if 'mock' in config:
-      r = config['mock'].get('CO2Range', '100-800')
+      r = config['mock'].get('CO2Range', co2range)
+      self.co2file = config['mock'].get('CO2File', None)
     self.co2min, self.co2max = [int(x) for x in r.split("-")]
+    self.read_co2_file()
+
+  def read_co2_file(self):
+    if self.co2file:
+      self.co2queue = deque()
+      fnum = 0
+      with open(self.co2file) as f:
+        for line in f:
+          if line.startswith("#"):
+            toks = [x.strip() for x in line.replace("#", "", 1).split("\t")]
+            fnum = toks.index('gCO2/kWh')
+          else:  
+            toks = line.split("\t")
+            co2 = None if toks[fnum].strip() == "NA" else float(toks[fnum])
+            self.co2queue.append(co2)
+        print(self.co2queue)
+    else:
+      self.co2queue = None
 
   def get_co2(self):
-    co2 = random.randint(self.co2min, self.co2max)
+    if self.co2queue and len(self.co2queue) > 0:
+      co2 = self.co2queue.popleft()
+    else: 
+      co2 = random.randint(self.co2min, self.co2max)
     # if co2 % 2 == 0:
     #   co2 = None
     return co2
