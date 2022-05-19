@@ -1167,7 +1167,23 @@ class EmissionProvider(object):
     
   def info_string(self):
     return type(self).__name__ + " (interval = " + str(self.interval) + " sec)"
-
+  
+  def get_co2(self, data=None):
+    if not data:
+      data = self.get_data()
+    try:
+      return float(data['carbonIntensity'])
+    except:   
+      return None
+    
+  def get_fossil_pct(self, data=None):
+    if not data:
+      data = self.get_data()
+    try:
+      return float(data['fossilFuelPercentage'])
+    except:   
+      return None
+    
 
 class CO2Signal(EmissionProvider):
   URL_BASE = "https://api.co2signal.com/v1/latest?"
@@ -1198,7 +1214,7 @@ class CO2Signal(EmissionProvider):
     else:
       self.api_url = self.URL_COORD.format(self.coord_lat, self.coord_lon)
 
-  def get_co2(self):
+  def get_data(self):
     req = urllib.request.Request(self.api_url)
     req.add_header("User-Agent", "Mozilla/5.0 (X11; U; Linux i686) Gecko/20071127 Firefox/2.0.0.11")
     req.add_header("auth-token", self.co2token)
@@ -1206,13 +1222,13 @@ class CO2Signal(EmissionProvider):
     try:
       resp = urllib.request.urlopen(req).read()
       js = json.loads(resp)
-      co2 = float(js['data']['carbonIntensity'])
+      data = js['data']
     except:
       e = sys.exc_info()[0]
       print ("Exception: ", e)
-      co2 = None
-    return co2
-
+      data = None
+    return data
+  
 class MockCO2Provider(EmissionProvider):
   def __init__(self, config):
     EmissionProvider.__init__(self, config)
@@ -1227,27 +1243,51 @@ class MockCO2Provider(EmissionProvider):
   def read_co2_file(self):
     if self.co2file:
       self.co2queue = deque()
-      fnum = 0
+      self.fossil_queue = deque()
+      co2_field = 0
+      fossil_field = 1
       with open(self.co2file) as f:
         for line in f:
-          if line.startswith("#"):
+          if line.startswith("##"):
+            pass
+          elif line.startswith("#"):
             toks = [x.strip() for x in line.replace("#", "", 1).split("\t")]
-            fnum = toks.index('gCO2/kWh')
+            try:
+              co2_field = toks.index('CI [g/kWh]')
+            except ValueError:
+              co2_field = toks.index('gCO2/kWh')
+            try:
+              fossil_field = toks.index('Fossil [%]')
+            except ValueError:
+              fossil_field = -1
           else:  
             toks = line.split("\t")
-            co2 = None if toks[fnum].strip() == "NA" else float(toks[fnum])
+            co2 = None if toks[co2_field].strip() == "NA" else float(toks[co2_field])
             self.co2queue.append(co2)
+            if fossil_field >= 0 and fossil_field < len(toks):
+              fossil_pct = None if toks[fossil_field].strip() == "NA" else float(toks[fossil_field])
+              self.fossil_queue.append(fossil_pct)
     else:
       self.co2queue = None
-
-  def get_co2(self):
+      self.fossil_queue = None
+      
+  def get_data(self):
     if self.co2queue and len(self.co2queue) > 0:
       co2 = self.co2queue.popleft()
+      fossil_pct = None
     else: 
       co2 = random.randint(self.co2min, self.co2max)
-    # if co2 % 2 == 0:
-    #   co2 = None
-    return co2
+      
+    if self.fossil_queue and len(self.fossil_queue) > 0:
+      fossil_pct = self.fossil_queue.popleft()
+    elif co2:
+      fossil_pct = (co2 - self.co2min) / (self.co2max - self.co2min)
+      fossil_pct = min(max(fossil_pct, 0), 1) * 100
+      
+    data = {}
+    data['carbonIntensity'] = co2
+    data['fossilFuelPercentage'] = fossil_pct
+    return data
 
 class Governor(object):
   def __init__(self, config, vmin, vmax):
@@ -1620,6 +1660,7 @@ class EcoLogger(object):
     self.fmt = NAFormatter()
     self.idle_fields = False
     self.idle_debug = False
+    self.co2_extra = config["general"].get("logco2extra", False)
     
   def init_fields(self, monitors):
     if monitors.get_period_idle():
@@ -1627,9 +1668,11 @@ class EcoLogger(object):
 #      self.idle_debug = True
     self.row_fmt = '{:<20}\t{:>10}\t{:>10}\t{:>10}\t{:>12.3f}\t{:>12.3f}\t{:>12.3f}\t{:>10.3f}\t{:>10.3f}'
     if self.idle_fields:
-      self.row_fmt += "\t{:<10}"
+      self.row_fmt += "\t{:<7}"
     if self.idle_debug:
       self.row_fmt += "\t{:>10}\t{:>10.3f}"
+    if self.co2_extra:
+      self.row_fmt += "\t{:>10}\t{:>8.3f}"
           
     self.header_fmt = "#" + self.row_fmt.replace(".3f", "")
 
@@ -1645,9 +1688,11 @@ class EcoLogger(object):
       headers += ["State"] 
     if self.idle_debug:
       headers += ["MaxSessions", "MaxLoad1"] 
+    if self.co2_extra:
+      headers += ["CI [g/kWh]", "Fossil [%]"]
     self.log(self.fmt.format(self.header_fmt, *headers))
 
-  def print_row(self, co2kwh, avg_freq, energy, avg_power, co2period, idle, stats):
+  def print_row(self, co2kwh, avg_freq, energy, avg_power, co2period, idle, stats, co2_data):
     ts = datetime.now().strftime(TS_FORMAT)
     max_freq = cpu_max_power = gpu_max_power = None
     if CpuFreqHelper.available():
@@ -1661,6 +1706,8 @@ class EcoLogger(object):
       cols += [idle]
     if self.idle_debug:
       cols += [stats["MaxSessions"], stats["MaxLoad1"]]
+    if self.co2_extra:
+      cols += [safe_round(co2_data["carbonIntensity"]), co2_data["fossilFuelPercentage"]]
       
     logstr = self.fmt.format(self.row_fmt, *cols)
 
@@ -1720,7 +1767,8 @@ class EcoFreq(object):
     
   def update_co2(self):
     # fetch new co2 intensity 
-    co2 = self.co2provider.get_co2()
+    co2_data = self.co2provider.get_data()
+    co2 = self.co2provider.get_co2(co2_data)
     if co2:
       if self.last_co2kwh:
         self.period_co2kwh = 0.5 * (co2 + self.last_co2kwh)
@@ -1742,7 +1790,7 @@ class EcoFreq(object):
       
     stats = self.monitor.get_stats()
     
-    self.co2logger.print_row(self.period_co2kwh, avg_freq, energy, avg_power, period_co2, idle, stats) 
+    self.co2logger.print_row(self.period_co2kwh, avg_freq, energy, avg_power, period_co2, idle, stats, co2_data) 
 
     # apply policy for new co2 reading
     if co2:
