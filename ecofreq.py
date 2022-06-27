@@ -222,7 +222,10 @@ class EcoServer(object):
 class EcoClient(object):
     
   async def unix_send(self, message):
-      reader, writer = await asyncio.open_unix_connection(EcoServer.IPC_PATH)
+      try:
+        reader, writer = await asyncio.open_unix_connection(EcoServer.IPC_PATH)
+      except FileNotFoundError:
+        raise ConnectionRefusedError
   
 #     print(f'Send: {message!r}')
       writer.write(message.encode())
