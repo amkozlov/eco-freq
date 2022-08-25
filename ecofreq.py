@@ -14,6 +14,7 @@ import string
 import traceback
 import asyncio
 import json
+import copy
 from math import ceil
 from inspect import isclass
 from _collections import deque
@@ -173,6 +174,16 @@ class EcoFreqController(object):
       self.ef.co2policy.set_co2(self.ef.last_co2kwh)
     self.ef.co2logger.print_cmd("set_policy")
 
+  def get_provider(self, res, args):
+    res['co2provider'] = self.ef.co2provider.get_config()
+
+  def set_provider(self, res, args):
+    old_cfg = self.ef.config 
+    new_cfg = copy.deepcopy(old_cfg)
+    new_cfg.read_dict(args["co2provider"])
+    self.ef.co2provider = EmissionProvider.from_config(new_cfg)
+    self.ef.co2logger.print_cmd("set_provider")
+
 class EcoServer(object):
   IPC_PATH="/tmp/ecofreq-ipc"
 
@@ -255,6 +266,12 @@ class EcoClient(object):
 
   def set_policy(self, policy):
     return self.send_cmd('set_policy', policy)
+  
+  def get_provider(self):
+    return self.send_cmd('get_provider')
+  
+  def set_provider(self, provider):
+    return self.send_cmd('set_provider', provider)
   
 class NvidiaGPUHelper(object):
   CMD_NVSMI = "nvidia-smi"
@@ -1156,6 +1173,8 @@ class IPMIEnergyMonitor(EnergyMonitor):
     return energy_diff
 
 class EmissionProvider(object):
+  LABEL=None
+  
   def __init__(self, config):
     self.interval = int(config["emission"]["interval"])
 
@@ -1186,15 +1205,32 @@ class EmissionProvider(object):
       return float(data['fossilFuelPercentage'])
     except:   
       return None
+
+  def get_config(self):
+    cfg = {"emission" : {}} 
+    cfg["emission"]["interval"] = self.interval
+    cfg["emission"]["provider"] = self.__class__.LABEL
+    return cfg
     
 
 class CO2Signal(EmissionProvider):
+  LABEL="co2signal"
   URL_BASE = "https://api.co2signal.com/v1/latest?"
   URL_COUNTRY = URL_BASE + "countryCode={0}"
   URL_COORD = URL_BASE + "lat={0}&lon={1}"
   
   def __init__(self, config):
     EmissionProvider.__init__(self, config)
+    self.set_config(config)
+    
+  def get_config(self):
+    cfg = super().get_config()
+    cfg[self.LABEL] = {}
+    cfg[self.LABEL]["token"] = self.co2token
+    cfg[self.LABEL]["country"] = self.co2country
+    return cfg
+
+  def set_config(self, config):
     self.co2country = config["co2signal"]["country"]
     self.co2token = config["co2signal"]["token"]
 
@@ -1233,18 +1269,32 @@ class CO2Signal(EmissionProvider):
     return data
   
 class MockCO2Provider(EmissionProvider):
+  LABEL="mock"
+  
   def __init__(self, config):
     EmissionProvider.__init__(self, config)
     self.co2file = None
+    self.set_config(config)
+
+  def get_config(self):
+    cfg = super().get_config()
+    cfg[self.LABEL] = {}
+    cfg[self.LABEL]["co2range"] = "{0}-{1}".format(self.co2min, self.co2max)
+    cfg[self.LABEL]["co2file"] = self.co2file
+    return cfg
+
+  def set_config(self, config):
     co2range = '100-800'
-    if 'mock' in config:
-      r = config['mock'].get('CO2Range', co2range)
-      self.co2file = config['mock'].get('CO2File', None)
-    self.co2min, self.co2max = [int(x) for x in r.split("-")]
+    if self.LABEL in config:
+      co2range = config[self.LABEL].get('co2range', co2range)
+      self.co2file = config[self.LABEL].get('co2file', None)
+    self.co2min, self.co2max = [int(x) for x in co2range.split("-")]
     self.read_co2_file()
 
   def read_co2_file(self):
     if self.co2file:
+      if not os.path.isfile(self.co2file):
+        raise ValueError("File not found: " + self.co2file)
       self.co2queue = deque()
       self.fossil_queue = deque()
       co2_field = 0
@@ -1690,7 +1740,7 @@ class EcoLogger(object):
     if self.idle_fields:
       headers += ["State"] 
     if self.idle_debug:
-      headers += ["MaxSessions", "MaxLoad1"] 
+      headers += ["MaxSessions", "MaxLoad"] 
     if self.co2_extra:
       headers += ["CI [g/kWh]", "Fossil [%]"]
     self.log(self.fmt.format(self.header_fmt, *headers))
@@ -1708,7 +1758,7 @@ class EcoLogger(object):
     if self.idle_fields:
       cols += [idle]
     if self.idle_debug:
-      cols += [stats["MaxSessions"], stats["MaxLoad1"]]
+      cols += [stats["MaxSessions"], stats["MaxLoad"]]
     if self.co2_extra:
       cols += [safe_round(co2_data["carbonIntensity"]), co2_data["fossilFuelPercentage"]]
       

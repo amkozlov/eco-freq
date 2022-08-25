@@ -11,7 +11,7 @@ from ecofreq import EcoClient, EcoFreq
 
 def parse_args():
   parser = argparse.ArgumentParser()
-  cmd_list = ["info", "policy"]
+  cmd_list = ["info", "policy", "provider"]
   parser.add_argument("command", choices=cmd_list, default="info", help="Command", nargs="?")
   parser.add_argument("cmd_args", nargs="*")
   args = parser.parse_args()
@@ -50,6 +50,18 @@ def policy_is_enabled(pol, domain="cpu"):
 def policy_str(pol, domain="cpu"):
   d = pol["co2policy"][domain]
   return "{0}({1})".format(d["control"], d["governor"])
+
+def provider_str(prov):
+  d = prov["co2provider"]
+  prov_type = d["emission"]["provider"]
+  interval = d["emission"]["interval"]
+  if prov_type == "co2signal":
+    param1 = "Token = " + d["co2signal"]["token"]
+    param2 = "Country = " + d["co2signal"]["country"]
+  elif prov_type == "mock":
+    param1 = "CO2Range = " + d["mock"]["co2range"]
+    param2 = "CO2File = " + d["mock"]["co2file"]
+  return "{0} (interval = {1} s, {2}, {3})".format(prov_type, interval, param1, param2)
   
 def cmd_policy(args):
   policy = ec.get_policy()
@@ -74,12 +86,45 @@ def cmd_policy(args):
   print() 
   pol_state = "ENABLED" if policy_is_enabled(policy) else "DISABLED"
   print("CO2-aware power scaling is now", pol_state)
+  
+def wildcard_set(d, attr, params, idx):
+  if len(params) > idx and params[idx] != "*":
+    d[attr] = params[idx]
+
+def cmd_provider(args):
+  prov = ec.get_provider()
+  
+  #print(prov)
+  if len(args.cmd_args) > 0:
+    # set provider
+    print("Old provider:", provider_str(prov))
+    prov_params = args.cmd_args[0].split(":")
+    p = prov["co2provider"]
+    wildcard_set(p["emission"], "provider", prov_params, 0)
+    wildcard_set(p["emission"], "interval", prov_params, 1)
+    prov_type = p["emission"]["provider"]
+    if prov_type == "co2signal":
+      wildcard_set(p["co2signal"], "token", prov_params, 2)
+      wildcard_set(p["co2signal"], "country", prov_params, 3)
+    elif prov_type == "mock":
+      wildcard_set(p["mock"], "co2range", prov_params, 2)
+      wildcard_set(p["mock"], "co2file", prov_params, 3)
+    #print(prov)
+    ret = ec.set_provider(prov)
+  
+    prov = ec.get_provider()
+    print("New provider:", provider_str(prov))
+  else:
+    # get policy
+    print("CO2 provider:", provider_str(prov))
 
 def run_command(args):
   if args.command == "info":
     cmd_info(args)
   elif args.command == "policy":  
     cmd_policy(args)      
+  elif args.command == "provider":  
+    cmd_provider(args)      
   else:
     print("Unknown command:", args.command)
 
