@@ -56,11 +56,11 @@ def provider_str(prov):
   prov_type = d["emission"]["provider"]
   interval = d["emission"]["interval"]
   if prov_type == "co2signal":
-    param1 = "Token = " + d["co2signal"]["token"]
-    param2 = "Country = " + d["co2signal"]["country"]
+    param1 = "Token = " + str(d["co2signal"]["token"])
+    param2 = "Country = " + str(d["co2signal"]["country"])
   elif prov_type == "mock":
-    param1 = "CO2Range = " + d["mock"]["co2range"]
-    param2 = "CO2File = " + d["mock"]["co2file"]
+    param1 = "CO2Range = " + str(d["mock"]["co2range"])
+    param2 = "CO2File = " + str(d["mock"]["co2file"])
   return "{0} (interval = {1} s, {2}, {3})".format(prov_type, interval, param1, param2)
   
 def cmd_policy(args):

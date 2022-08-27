@@ -181,8 +181,7 @@ class EcoFreqController(object):
     old_cfg = self.ef.config 
     new_cfg = copy.deepcopy(old_cfg)
     new_cfg.read_dict(args["co2provider"])
-    self.ef.co2provider = EmissionProvider.from_config(new_cfg)
-    self.ef.co2logger.print_cmd("set_provider")
+    self.ef.reset_co2provider(new_cfg)
 
 class EcoServer(object):
   IPC_PATH="/tmp/ecofreq-ipc"
@@ -1327,12 +1326,14 @@ class MockCO2Provider(EmissionProvider):
   def get_data(self):
     if self.co2queue and len(self.co2queue) > 0:
       co2 = self.co2queue.popleft()
+      self.co2queue.append(co2)
       fossil_pct = None
     else: 
       co2 = random.randint(self.co2min, self.co2max)
       
     if self.fossil_queue and len(self.fossil_queue) > 0:
       fossil_pct = self.fossil_queue.popleft()
+      self.fossil_queue.append(fossil_pct)
     elif co2:
       fossil_pct = (co2 - self.co2min) / (self.co2max - self.co2min)
       fossil_pct = min(max(fossil_pct, 0), 1) * 100
@@ -1797,6 +1798,7 @@ class EcoFreq(object):
     self.last_co2kwh = self.co2provider.get_co2()
     self.total_co2 = 0.
     self.start_date = datetime.now()
+    self.co2provider_updated = False
     
   def get_info(self):
     return {"logfile": self.co2logger.log_fname,
@@ -1817,6 +1819,11 @@ class EcoFreq(object):
   def info(self):
     info = self.get_info()
     EcoFreq.print_info(info)
+    
+  def reset_co2provider(self, cfg):
+    self.co2provider = EmissionProvider.from_config(cfg)
+    self.co2provider_updated = True
+    self.co2logger.print_cmd("set_provider")
     
   def update_co2(self):
     # fetch new co2 intensity 
@@ -1876,7 +1883,11 @@ class EcoFreq(object):
         duration += self.sample_interval
         t1 = datetime.now()
         self.monitor.update(duration)
-        if duration % self.co2provider.interval == 0:
+        do_update_co2 = duration % self.co2provider.interval == 0 
+        if self.co2provider_updated:
+          do_update_co2 = True
+          self.co2provider_updated = False
+        if do_update_co2:
           self.update_co2()
           self.monitor.reset_period() 
         self.write_shm()  
