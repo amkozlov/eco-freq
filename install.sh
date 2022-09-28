@@ -42,7 +42,7 @@ then
   then
     co2policy=none
   else
-    co2policy=linear
+    co2policy=default
   fi
 fi
 
@@ -53,6 +53,8 @@ echo -e "Configuration saved to: $cfgfile\n"
 echo -e "Step 2: Register systemd service...\n"
 
 sed -e "s#<ECOFREQ_HOME>#$ecohome#" ecofreq.service > $servicehome/ecofreq.service
+
+sudo addgroup ecofreq
 
 sudo systemctl daemon-reload
 

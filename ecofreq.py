@@ -156,7 +156,9 @@ class EcoFreqController(object):
     res['avg_power'] = self.ef.monitor.get_last_avg_power()
     res['total_energy_j'] = self.ef.monitor.get_total_energy()
     res['total_co2'] = self.ef.total_co2
+    res['total_cost'] = self.ef.total_cost
     res['last_co2kwh'] = self.ef.last_co2kwh
+    res['last_price'] = self.ef.last_price
 
   def get_policy(self, res, args):
     res['co2policy'] = self.ef.co2policy.get_config()
@@ -168,10 +170,12 @@ class EcoFreqController(object):
     for domain in args["co2policy"].keys():
       new_cfg[domain] = old_cfg
       new_cfg[domain].update(args["co2policy"][domain])
+      # all domains use the same metric for now
+      new_cfg["metric"] = args["co2policy"][domain]["metric"]
 #    print(new_cfg)
     self.ef.co2policy.set_config(new_cfg)
-    if self.ef.last_co2kwh:
-      self.ef.co2policy.set_co2(self.ef.last_co2kwh)
+    if self.ef.last_co2_data:
+      self.ef.co2policy.set_co2(self.ef.last_co2_data)
     self.ef.co2logger.print_cmd("set_policy")
 
   def get_provider(self, res, args):
@@ -1173,6 +1177,9 @@ class IPMIEnergyMonitor(EnergyMonitor):
 
 class EmissionProvider(object):
   LABEL=None
+  FIELD_CO2='carbonIntensity'
+  FIELD_PRICE='pricePerKwh'
+  FIELD_FOSSIL_PCT='fossilFuelPercentage'
   
   def __init__(self, config):
     self.interval = int(config["emission"]["interval"])
@@ -1189,21 +1196,22 @@ class EmissionProvider(object):
   def info_string(self):
     return type(self).__name__ + " (interval = " + str(self.interval) + " sec)"
   
-  def get_co2(self, data=None):
+  def get_field(self, field, data=None):
     if not data:
       data = self.get_data()
     try:
-      return float(data['carbonIntensity'])
+      return float(data[field])
     except:   
       return None
+
+  def get_co2(self, data=None):
+    return self.get_field(self.FIELD_CO2, data)
     
   def get_fossil_pct(self, data=None):
-    if not data:
-      data = self.get_data()
-    try:
-      return float(data['fossilFuelPercentage'])
-    except:   
-      return None
+    return self.get_field(self.FIELD_FOSSIL_PCT, data)
+
+  def get_price(self, data=None):
+    return self.get_field(self.FIELD_PRICE, data)
 
   def get_config(self):
     cfg = {"emission" : {}} 
@@ -1296,6 +1304,7 @@ class MockCO2Provider(EmissionProvider):
         raise ValueError("File not found: " + self.co2file)
       self.co2queue = deque()
       self.fossil_queue = deque()
+      self.price_queue = deque()
       co2_field = 0
       fossil_field = 1
       with open(self.co2file) as f:
@@ -1312,6 +1321,14 @@ class MockCO2Provider(EmissionProvider):
               fossil_field = toks.index('Fossil [%]')
             except ValueError:
               fossil_field = -1
+            if 'Price/kWh' in toks:
+              price_field = toks.index('Price/kWh')
+              price_factor = 1
+            elif 'EUR/MWh'in toks:
+              price_field = toks.index('EUR/MWh')
+              price_factor = 0.1
+            else:
+              price_field = -1
           else:  
             toks = line.split("\t")
             co2 = None if toks[co2_field].strip() == "NA" else float(toks[co2_field])
@@ -1319,9 +1336,13 @@ class MockCO2Provider(EmissionProvider):
             if fossil_field >= 0 and fossil_field < len(toks):
               fossil_pct = None if toks[fossil_field].strip() == "NA" else float(toks[fossil_field])
               self.fossil_queue.append(fossil_pct)
+            if price_field >= 0 and price_field < len(toks):
+              price_kwh = None if toks[price_field].strip() == "NA" else float(toks[price_field]) * price_factor
+              self.price_queue.append(price_kwh)
     else:
       self.co2queue = None
       self.fossil_queue = None
+      self.price_queue = None
       
   def get_data(self):
     if self.co2queue and len(self.co2queue) > 0:
@@ -1337,80 +1358,137 @@ class MockCO2Provider(EmissionProvider):
     elif co2:
       fossil_pct = (co2 - self.co2min) / (self.co2max - self.co2min)
       fossil_pct = min(max(fossil_pct, 0), 1) * 100
+
+    if self.price_queue and len(self.price_queue) > 0:
+      price_kwh = self.price_queue.popleft()
+      self.price_queue.append(price_kwh)
+    else:
+      price_kwh = None
       
     data = {}
-    data['carbonIntensity'] = co2
-    data['fossilFuelPercentage'] = fossil_pct
+    data[self.FIELD_CO2] = co2
+    data[self.FIELD_FOSSIL_PCT] = fossil_pct
+    data[self.FIELD_PRICE] = price_kwh
     return data
 
 class Governor(object):
-  def __init__(self, config, vmin, vmax):
-    r = config["co2range"].lower()
-    if r == "auto":
-      self.co2min = self.co2max = -1
-    else:
-      self.co2min, self.co2max = [int(x) for x in r.split("-")]
+  LABEL="None"
+
+  def __init__(self, args, vmin, vmax):
     self.val_round = 3
     
   def info_args(self):
-    return []
+    return {}
   
-  def info_string(self):
-    args = [type(self).__name__]
-    args += self.info_args()
+  def info_string(self, unit={"": 1}):
+    args = [self.LABEL]
+    d = self.info_args()
+    for k in sorted(d.keys()):
+      if d[k]:
+        uname, ufactor = list(unit.items())[0]
+        arg = "{0}={1}{2}".format(k, d[k] / ufactor, uname)
+      else:
+        arg = str(k)
+      args.append(arg)
     return ":".join(args)
   
   def round_val(self, val):
     return int(round(val, self.val_round))
-  
-  def get_config(self, config={}):
-    config["co2range"] = "{0}-{1}".format(self.co2min, self.co2max)
-    return config
 
   @classmethod
-  def from_config(cls, config, vmin, vmax):
-    t = config["governor"].lower()
+  def parse_args(cls, toks):
+    args = {}
+    for t in toks:
+      if "=" in t:
+        k, v = t.split("=")
+        args[k] = v
+      else:
+        args[t] = None
+    return args
 
-    if t == "linear" or t == "lineargovernor":
-      return LinearGovernor(config, vmin, vmax)
-    elif t == "maxperf":
-      return ConstantGovernor(config, vmax)
-    elif t.startswith("const"):
-      toks = t.split(":")
+  @classmethod
+  def parse_val(cls, vstr, vmin, vmax, units={}):
+    if vstr == "min":
+      val = vmin
+    elif vstr == "max":
       val = vmax
-      if len(toks) > 1:
-        if toks[1].endswith("%"):
-          p = float(toks[1].strip("%")) / 100
+    else:  
+      val = None
+      # absolute value with unit specifier (W, MHz etc.)
+      for uname, ufactor in units.items():
+        if vstr.endswith(uname.lower()):
+          val = float(vstr.strip(uname.lower())) * ufactor
+          break 
+      if not val:
+        # relative value
+        if vstr.endswith("%"):
+          p = float(vstr.strip("%")) / 100
         else:
-          p = float(toks[1])
+          p = float(vstr)
         val = vmax * p
-        if val > vmax or val < vmin:
-          raise ValueError("Constant governor parameter out-of-bounds: " + toks[1])   
-      return ConstantGovernor(config, val)
+    if val > vmax or val < vmin:
+      raise ValueError("Constant governor parameter out-of-bounds: " + vstr)   
+    return val
+  
+  @classmethod
+  def from_config(cls, config, vmin, vmax, units):
+    govstr = config["governor"].lower()
+    if govstr == "default":
+      govstr = config["defaultgovernor"].lower()
+    toks = govstr.split(":")
+    t = toks[0] 
+    args = cls.parse_args(toks[1:])
+    if t == "linear" or t == "lineargovernor":
+      return LinearGovernor(args, vmin, vmax, units)
+    elif t == "maxperf":
+      args = {}
+      return ConstantGovernor(args, vmin, vmax, units)
+    elif t == "const":
+      return ConstantGovernor(args, vmin, vmax, units)
     elif t in OPTION_DISABLED:
       return None
     else:
       raise ValueError("Unknown governor: " + t)
 
 class ConstantGovernor(Governor):
-  def __init__(self, config, val):
-    Governor.__init__(self, config, val, val)
-    self.val = val
+  LABEL="const"
+
+  def __init__(self, args, vmin, vmax, units):
+    Governor.__init__(self, args, vmin, vmax)
+    if len(args) > 0:
+      s = list(args.keys())[0]
+      self.val = Governor.parse_val(s, vmin, vmax, units)
+    else:
+      self.val = vmax
     
   def info_args(self):
-    return [str(self.round_val(self.val))] 
+    return {self.round_val(self.val) : None} 
 
   def co2val(self, co2):
     return self.val
   
 class LinearGovernor(Governor):
-  def __init__(self, config, vmin, vmax):
-    Governor.__init__(self, config, vmin, vmax)
+  LABEL="linear"
+  
+  def __init__(self, args, vmin, vmax, units):
+    Governor.__init__(self, args, vmin, vmax)
+    self.co2min = self.co2max = -1
     self.vmin = vmin
     self.vmax = vmax
+    if len(args) == 2:
+      self.co2min, self.co2max = sorted([int(x) for x in args.keys()])
+      v1 = args[str(self.co2max)]
+      v2 = args[str(self.co2min)]
+      if v1:
+        self.vmin = Governor.parse_val(v1, vmin, vmax, units)
+      if v2:
+        self.vmax = Governor.parse_val(v2, vmin, vmax, units)
 
   def info_args(self):
-    return [str(self.round_val(self.vmin)), str(self.round_val(self.vmax))] 
+    args = {}
+    args[self.co2min] = self.round_val(self.vmax)
+    args[self.co2max] = self.round_val(self.vmin)
+    return args 
 
   def co2val(self, co2):
     if co2 >= self.co2max:
@@ -1424,23 +1502,22 @@ class LinearGovernor(Governor):
     return val
 
 class EcoPolicy(object):
+  UNIT={}
   def __init__(self, config):
     self.debug = False
 
   def info_string(self):
-    g = self.governor.info_string() if self.governor else "None" 
-    return type(self).__name__ + "(" + g + ")" 
+    g = self.governor.info_string(self.UNIT) if self.governor else "None" 
+    return type(self).__name__ + " (governor = " + g + ")" 
 
   def init_governor(self, config, vmin, vmax, vround=None):
-    self.governor = Governor.from_config(config, vmin, vmax)
+    self.governor = Governor.from_config(config, vmin, vmax, self.UNIT)
     if self.governor and vround:
       self.governor.val_round = vround
       
   def get_config(self, config={}):
     config["control"] = type(self).__name__
-    config["governor"] = type(self.governor).__name__ if self.governor else "none"
-    if self.governor:
-      self.governor.get_config(config)
+    config["governor"] = self.governor.info_string(self.UNIT) if self.governor else "none"
     return config
   
   def co2val(self, co2):
@@ -1486,6 +1563,8 @@ class CPUEcoPolicy(EcoPolicy):
       raise ValueError("Unknown policy: " + c)
 
 class CPUFreqEcoPolicy(CPUEcoPolicy):
+  UNIT={"MHz": CpuFreqHelper.MHZ}
+  
   def __init__(self, config):
     CPUEcoPolicy.__init__(self, config)
     self.driver = CpuFreqHelper.get_driver()
@@ -1512,6 +1591,8 @@ class CPUFreqEcoPolicy(CPUEcoPolicy):
     self.set_freq(self.fmax)
 
 class CPUPowerEcoPolicy(CPUEcoPolicy):
+  UNIT={"W": LinuxPowercapHelper.WATT}
+  
   def __init__(self, config):
     EcoPolicy.__init__(self, config)
     
@@ -1570,6 +1651,8 @@ class GPUEcoPolicy(EcoPolicy):
       raise ValueError("Unknown policy: " + c)
 
 class GPUPowerEcoPolicy(GPUEcoPolicy):
+  UNIT={"W": 1}
+  
   def __init__(self, config):
     GPUEcoPolicy.__init__(self, config)
     
@@ -1604,6 +1687,7 @@ class EcoPolicyManager(object):
   def info_string(self):
     if self.policies:
       s = [p.info_string() for p in self.policies]
+      s.append("metric = " + self.metric)
       return  ", ".join(s)
     else:
       return "None"
@@ -1616,6 +1700,7 @@ class EcoPolicyManager(object):
     if not cfg:
       self.clear()
       return
+    self.metric = cfg.get("metric", "co2")
     if "cpu" in cfg or "gpu" in cfg:
       all_cfg = None
     else:
@@ -1639,11 +1724,20 @@ class EcoPolicyManager(object):
       elif issubclass(type(p), GPUEcoPolicy):
         domain = "gpu"
       res[domain] = p.get_config()
+      res[domain]["metric"] = self.metric
     return res
     
-  def set_co2(self, co2):
-    for p in self.policies:
-      p.set_co2(co2)
+  def set_co2(self, co2_data):
+    if self.metric == "price":
+      field = EmissionProvider.FIELD_PRICE
+    elif self.metric == "fossil_pct":
+      field = EmissionProvider.FIELD_FOSSIL_PCT
+    else:
+      field = EmissionProvider.FIELD_CO2
+    if co2_data[field]:
+      val = float(co2_data[field])
+      for p in self.policies:
+        p.set_co2(val)
 
   def reset(self):
     for p in self.policies:
@@ -1714,6 +1808,7 @@ class EcoLogger(object):
     self.fmt = NAFormatter()
     self.idle_fields = False
     self.idle_debug = False
+    self.cost_fields = config["general"].get("logcost", False)
     self.co2_extra = config["general"].get("logco2extra", False)
     
   def init_fields(self, monitors):
@@ -1727,6 +1822,8 @@ class EcoLogger(object):
       self.row_fmt += "\t{:>10}\t{:>10.3f}"
     if self.co2_extra:
       self.row_fmt += "\t{:>10}\t{:>8.3f}"
+    if self.cost_fields:
+      self.row_fmt += "\t{:>8.3f}\t{:>8.3f}"
           
     self.header_fmt = "#" + self.row_fmt.replace(".3f", "")
 
@@ -1744,9 +1841,11 @@ class EcoLogger(object):
       headers += ["MaxSessions", "MaxLoad"] 
     if self.co2_extra:
       headers += ["CI [g/kWh]", "Fossil [%]"]
+    if self.cost_fields:
+      headers += ["Price/kWh", "Cost"]
     self.log(self.fmt.format(self.header_fmt, *headers))
 
-  def print_row(self, co2kwh, avg_freq, energy, avg_power, co2period, idle, stats, co2_data):
+  def print_row(self, co2kwh, period_price, avg_freq, energy, avg_power, co2period, period_cost, idle, stats, co2_data):
     ts = datetime.now().strftime(TS_FORMAT)
     max_freq = cpu_max_power = gpu_max_power = None
     if CpuFreqHelper.available():
@@ -1761,7 +1860,9 @@ class EcoLogger(object):
     if self.idle_debug:
       cols += [stats["MaxSessions"], stats["MaxLoad"]]
     if self.co2_extra:
-      cols += [safe_round(co2_data["carbonIntensity"]), co2_data["fossilFuelPercentage"]]
+      cols += [safe_round(co2_data[EmissionProvider.FIELD_CO2]), co2_data[EmissionProvider.FIELD_FOSSIL_PCT]]
+    if self.cost_fields:
+      cols += [period_price, period_cost]
       
     logstr = self.fmt.format(self.row_fmt, *cols)
 
@@ -1795,8 +1896,11 @@ class EcoFreq(object):
     # make sure that CO2 sampling interval is a multiple of energy sampling interval
     self.sample_interval = self.monitor.adjust_interval(self.co2provider.interval)
     # print("sampling intervals co2/energy:", self.co2provider.interval, self.sample_interval)
-    self.last_co2kwh = self.co2provider.get_co2()
+    self.last_co2_data = self.co2provider.get_data()
+    self.last_co2kwh = self.co2provider.get_co2(self.last_co2_data)
+    self.last_price = self.co2provider.get_price(self.last_co2_data)
     self.total_co2 = 0.
+    self.total_cost = 0.
     self.start_date = datetime.now()
     self.co2provider_updated = False
     
@@ -1836,6 +1940,16 @@ class EcoFreq(object):
         self.period_co2kwh = co2
     else:
       self.period_co2kwh = self.last_co2kwh
+      self.last_co2kwh = co2
+
+    price_kwh = self.co2provider.get_price(co2_data)
+    if price_kwh:
+      if self.last_price:
+        self.period_price = self.last_price
+      else:
+        self.period_price = price_kwh
+    else:
+      self.period_price = self.last_price
 
     # prepare and print log row -> shows values for *past* interval!
     idle = self.monitor.get_period_idle()
@@ -1847,26 +1961,42 @@ class EcoFreq(object):
       self.total_co2 += period_co2
     else:
       period_co2 = None
+
+    if self.period_price:
+      period_cost = energy * self.period_price / JOULES_IN_KWH
+      self.total_cost += period_cost
+    else:
+      period_cost = None
       
     stats = self.monitor.get_stats()
     
-    self.co2logger.print_row(self.period_co2kwh, avg_freq, energy, avg_power, period_co2, idle, stats, co2_data) 
+    self.co2logger.print_row(self.period_co2kwh, self.period_price, avg_freq, energy, avg_power, period_co2, period_cost, idle, stats, co2_data) 
 
     # apply policy for new co2 reading
+    self.co2policy.set_co2(co2_data)
+
     if co2:
-      self.co2policy.set_co2(co2)
       self.co2history.add_co2(co2)
-        
+
+    self.last_co2_data = co2_data       
     self.last_co2kwh = co2
+    self.last_price = price_kwh
     
   def write_shm(self):  
     energy_j = str(round(self.monitor.get_total_energy(), 3))
     co2_g = self.total_co2
-    if self.monitor.get_period_energy() > 0. and self.last_co2kwh:
-      co2_g += self.monitor.get_period_energy() * self.last_co2kwh / JOULES_IN_KWH
+    cost = self.total_cost
+    period_energy = self.monitor.get_period_energy()
+    if period_energy > 0.:
+      if self.last_co2kwh:
+        co2_g += period_energy * self.last_co2kwh / JOULES_IN_KWH
+      if self.last_price:
+        cost += period_energy * self.last_price / JOULES_IN_KWH
+        
     co2_g = str(round(co2_g, 3))
+    cost = str(round(cost, 3))
     with open(SHM_FILE, "w") as f:
-      f.write(" ".join([energy_j, co2_g]))
+      f.write(" ".join([energy_j, co2_g, cost]))
 
   async def spin(self):
     try:

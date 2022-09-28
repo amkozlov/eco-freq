@@ -1,3 +1,6 @@
+[general]
+#LogCost=true
+
 [emission]
 Provider=co2signal
 Interval=600
@@ -10,8 +13,9 @@ Country=<CO2COUNTRY>
 
 [policy]
 Control=auto
+Metric=co2
+DefaultGovernor=Linear:150:500
 Governor=<CO2POLICY>
-CO2Range=150-500
 
 [monitor]
 PowerSensor=auto

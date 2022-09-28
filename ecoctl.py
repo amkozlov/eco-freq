@@ -31,6 +31,7 @@ def cmd_info(args):
   print("Load:                  ", info["idle_load"])
   print("Power [W]:             ", round(info["avg_power"]))
   print("CO2 intensity [g/kWh]: ", info["last_co2kwh"])     
+  print("Energy price [ct/kWh]: ", round(info["last_price"], 3))     
   print("")
   print("= STATISTICS =")
   ts_start = datetime.strptime(info["start_date"], TS_FORMAT)
@@ -38,6 +39,7 @@ def cmd_info(args):
   print("Running since:         ", info["start_date"], "(up " + uptime + ")")     
   print("Energy consumed [kWh]: ", round(float(info["total_energy_j"]) / JOULES_IN_KWH, 3))     
   print("CO2 total [kg]:        ", round(float(info["total_co2"]) / 1000., 6))
+  print("Cost total [EUR]:      ", round(float(info["total_cost"]) / 100., 6))
 
 def policy_is_enabled(pol, domain="cpu"):
   if not domain in pol["co2policy"]:
@@ -70,10 +72,13 @@ def cmd_policy(args):
     # set policy
     print("Old policy:", policy_str(policy))
     gov = args.cmd_args[0]
+    if gov.startswith("co2:") or gov.startswith("price:") or gov.startswith("fossil_pct:"):
+      metric, gov = gov.split(":", 1)
+      policy["co2policy"]["cpu"]["metric"] = metric
     if gov in ["off", "disabled"]:
       gov = "none"
     elif gov in ["on", "enabled", "default", "eco"]:
-      gov = "linear"
+      gov = "default"
     policy["co2policy"]["cpu"]["governor"] = gov
     ret = ec.set_policy(policy)
   
