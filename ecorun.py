@@ -39,6 +39,7 @@ if __name__ == '__main__':
   
   outfile = None
   runname = "noname"
+  iters = 1
   cmdline_start = 1
   if len(sys.argv) > 3 and sys.argv[1] == "-p":
     gov = sys.argv[2]
@@ -58,6 +59,10 @@ if __name__ == '__main__':
   if len(sys.argv) > 7 and sys.argv[5] == "-n":
     runname = sys.argv[6]
     cmdline_start += 2
+
+  if len(sys.argv) > 9 and sys.argv[7] == "-i":
+    iters = int(sys.argv[8])
+    cmdline_start += 2
  
   cmdline = sys.argv[cmdline_start:]
   
@@ -66,7 +71,8 @@ if __name__ == '__main__':
   start_time = time.time()
 
 #  call(cmdline, shell=True)
-  call(cmdline)
+  for i in range(iters):
+    call(cmdline)
 
   end_time = time.time()
 
