@@ -51,7 +51,7 @@ def policy_is_enabled(pol, domain="cpu"):
 
 def policy_str(pol, domain="cpu"):
   d = pol["co2policy"][domain]
-  return "{0}({1})".format(d["control"], d["governor"])
+  return "{0}(governor = {1}, metric = {2})".format(d["control"], d["governor"], d["metric"])
 
 def provider_str(prov):
   d = prov["co2provider"]

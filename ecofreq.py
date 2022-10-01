@@ -1440,6 +1440,8 @@ class Governor(object):
     args = cls.parse_args(toks[1:])
     if t == "linear" or t == "lineargovernor":
       return LinearGovernor(args, vmin, vmax, units)
+    elif t == "step":
+      return StepGovernor(args, vmin, vmax, units)
     elif t == "maxperf":
       args = {}
       return ConstantGovernor(args, vmin, vmax, units)
@@ -1498,6 +1500,33 @@ class LinearGovernor(Governor):
     else:
       k = 1.0 - float(co2 - self.co2min) / (self.co2max - self.co2min)
     val = self.vmin + (self.vmax - self.vmin) * k
+    val = int(round(val, self.val_round))
+    return val
+
+class StepGovernor(Governor):
+  LABEL="step"
+  
+  def __init__(self, args, vmin, vmax, units):
+    Governor.__init__(self, args, vmin, vmax)
+    self.vmin = vmin
+    self.vmax = vmax
+    self.steps = []
+    for s in sorted([int(x) for x in args.keys()], reverse=True):
+      v = Governor.parse_val(args[str(s)], vmin, vmax, units)
+      self.steps.append((s, v))
+
+  def info_args(self):
+    args = {}
+    for s, v in reversed(self.steps):
+      args[s] = v
+    return args 
+
+  def co2val(self, co2):
+    val = self.vmax
+    for s, v in self.steps:
+      if co2 >= s:
+        val = v
+        break 
     val = int(round(val, self.val_round))
     return val
 
