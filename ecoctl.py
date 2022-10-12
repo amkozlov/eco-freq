@@ -9,6 +9,9 @@ from subprocess import call,STDOUT,DEVNULL,CalledProcessError
 from ecofreq import SHM_FILE, JOULES_IN_KWH, TS_FORMAT
 from ecofreq import EcoClient, EcoFreq
 
+def safe_round(val, digits=0):
+  return round(val, digits) if (isinstance(val, float)) else val
+
 def parse_args():
   parser = argparse.ArgumentParser()
   cmd_list = ["info", "policy", "provider"]
@@ -31,7 +34,7 @@ def cmd_info(args):
   print("Load:                  ", info["idle_load"])
   print("Power [W]:             ", round(info["avg_power"]))
   print("CO2 intensity [g/kWh]: ", info["last_co2kwh"])     
-  print("Energy price [ct/kWh]: ", round(info["last_price"], 3))     
+  print("Energy price [ct/kWh]: ", safe_round(info["last_price"], 3))     
   print("")
   print("= STATISTICS =")
   ts_start = datetime.strptime(info["start_date"], TS_FORMAT)
