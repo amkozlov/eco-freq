@@ -1,8 +1,10 @@
 [general]
 #LogCost=true
 
-[emission]
-Provider=co2signal
+[provider]
+co2=co2signal
+# fixed energy price: 30 ct/kWh
+price=const:30
 Interval=600
 
 [co2signal]

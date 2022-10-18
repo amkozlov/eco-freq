@@ -58,15 +58,24 @@ def policy_str(pol, domain="cpu"):
 
 def provider_str(prov):
   d = prov["co2provider"]
-  prov_type = d["emission"]["provider"]
-  interval = d["emission"]["interval"]
-  if prov_type == "co2signal":
-    param1 = "Token = " + str(d["co2signal"]["token"])
-    param2 = "Country = " + str(d["co2signal"]["country"])
-  elif prov_type == "mock":
-    param1 = "CO2Range = " + str(d["mock"]["co2range"])
-    param2 = "CO2File = " + str(d["mock"]["co2file"])
-  return "{0} (interval = {1} s, {2}, {3})".format(prov_type, interval, param1, param2)
+  interval = d["provider"]["interval"]
+  provlist = []
+  for m in d["provider"].keys():
+    if m not in ["all", "co2", "price"]:
+      continue
+    prov_type = d["provider"][m]
+    if prov_type.startswith("const"):
+      provstr = prov_type
+    elif prov_type == "co2signal":
+      param1 = "Country = " + str(d["co2signal"]["country"])
+#      param2 = "Token = " + str(d["co2signal"]["token"])
+      provstr = "{0} (interval = {1} s, {2})".format(prov_type, interval, param1)
+    elif prov_type == "mock":
+      param1 = "CO2Range = " + str(d["mock"]["co2range"])
+      param2 = "CO2File = " + str(d["mock"]["co2file"])
+      provstr = "{0} (interval = {1} s, {2}, {3})".format(prov_type, interval, param1, param2)
+    provlist.append(m + " = " + provstr)
+  return ", ".join(provlist)
   
 def cmd_policy(args):
   policy = ec.get_policy()
@@ -102,22 +111,34 @@ def wildcard_set(d, attr, params, idx):
 def cmd_provider(args):
   prov = ec.get_provider()
   
-  #print(prov)
+#  print(prov)
   if len(args.cmd_args) > 0:
     # set provider
     print("Old provider:", provider_str(prov))
-    prov_params = args.cmd_args[0].split(":")
+
+    pstr = args.cmd_args[0] 
+    if pstr.startswith("co2:") or pstr.startswith("price:") or pstr.startswith("fossil_pct:"):
+      metric, pstr = pstr.split(":", 1)
+      prov["co2provider"]["provider"]['all'] = None
+    else:
+      metric = "all"
+    
+    prov_params = pstr.split(":")
     p = prov["co2provider"]
-    wildcard_set(p["emission"], "provider", prov_params, 0)
-    wildcard_set(p["emission"], "interval", prov_params, 1)
-    prov_type = p["emission"]["provider"]
+    wildcard_set(p["provider"], metric, prov_params, 0)
+    wildcard_set(p["provider"], "interval", prov_params, 1)
+    prov_type = p["provider"][metric]
+    if prov_type not in p:
+      p[prov_type] = {}
     if prov_type == "co2signal":
       wildcard_set(p["co2signal"], "token", prov_params, 2)
       wildcard_set(p["co2signal"], "country", prov_params, 3)
     elif prov_type == "mock":
       wildcard_set(p["mock"], "co2range", prov_params, 2)
       wildcard_set(p["mock"], "co2file", prov_params, 3)
-    #print(prov)
+    elif prov_type == "const":
+      wildcard_set(p["const"], metric, prov_params, 2)
+#    print(prov)
     ret = ec.set_provider(prov)
   
     prov = ec.get_provider()

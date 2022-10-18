@@ -183,9 +183,13 @@ class EcoFreqController(object):
 
   def set_provider(self, res, args):
     old_cfg = self.ef.config 
+#    print(args["co2provider"])
     new_cfg = copy.deepcopy(old_cfg)
-    new_cfg.read_dict(args["co2provider"])
-    self.ef.reset_co2provider(new_cfg)
+    try:
+      new_cfg.read_dict(args["co2provider"])
+      self.ef.reset_co2provider(new_cfg)
+    except:
+      print(sys.exc_info())
 
 class EcoServer(object):
   IPC_PATH="/tmp/ecofreq-ipc"
@@ -1175,24 +1179,21 @@ class IPMIEnergyMonitor(EnergyMonitor):
     self.last_pwr = cur_pwr
     return energy_diff
 
-class EmissionProvider(object):
+class EcoProvider(object):
   LABEL=None
-  FIELD_CO2='carbonIntensity'
-  FIELD_PRICE='pricePerKwh'
-  FIELD_FOSSIL_PCT='fossilFuelPercentage'
+  FIELD_CO2='co2'
+  FIELD_PRICE='price'
+  FIELD_FOSSIL_PCT='fossil_pct'
   
-  def __init__(self, config):
-    self.interval = int(config["emission"]["interval"])
-
-  @classmethod
-  def from_config(cls, config):
-    prov_dict = {"co2signal" : CO2Signal, "mock" : MockCO2Provider }
-    p = config["emission"].get("Provider", "co2signal")
-    if p in prov_dict:
-      return prov_dict[p](config)  
+  def __init__(self, config, glob_interval):
+    if "interval" in config:
+      self.interval = int(config["interval"])
     else:
-      raise ValueError("Unknown emission provider: " + p)
-    
+      self.interval = glob_interval
+
+  def cfg_string(self):
+    return self.LABEL
+
   def info_string(self):
     return type(self).__name__ + " (interval = " + str(self.interval) + " sec)"
   
@@ -1214,32 +1215,58 @@ class EmissionProvider(object):
     return self.get_field(self.FIELD_PRICE, data)
 
   def get_config(self):
-    cfg = {"emission" : {}} 
-    cfg["emission"]["interval"] = self.interval
-    cfg["emission"]["provider"] = self.__class__.LABEL
+    cfg = {}
+    cfg["interval"] = self.interval
     return cfg
-    
 
-class CO2Signal(EmissionProvider):
+class ConstantProvider(EcoProvider):
+  LABEL="const"
+
+  def __init__(self, config, glob_interval):
+    EcoProvider.__init__(self, config, glob_interval)
+    self.set_config(config)
+
+  def info_string(self):
+    return self.cfg_string()
+
+  def cfg_string(self):
+    return "{0}:{1}".format(self.LABEL, self.data[self.metric])
+
+  def get_config(self):
+    cfg = super().get_config()
+    cfg[self.metric] = self.data[self.metric]
+    return cfg
+
+  def set_config(self, config):
+    self.data = {}
+    for m, v in config.items():
+      self.metric = m
+      self.data[m] = float(v)
+
+  def get_data(self):
+    return self.data
+
+class CO2Signal(EcoProvider):
   LABEL="co2signal"
   URL_BASE = "https://api.co2signal.com/v1/latest?"
   URL_COUNTRY = URL_BASE + "countryCode={0}"
   URL_COORD = URL_BASE + "lat={0}&lon={1}"
+  FIELD_MAP = {EcoProvider.FIELD_CO2: "carbonIntensity", 
+               EcoProvider.FIELD_FOSSIL_PCT: "fossilFuelPercentage"}
   
-  def __init__(self, config):
-    EmissionProvider.__init__(self, config)
+  def __init__(self, config, glob_interval):
+    EcoProvider.__init__(self, config, glob_interval)
     self.set_config(config)
     
   def get_config(self):
     cfg = super().get_config()
-    cfg[self.LABEL] = {}
-    cfg[self.LABEL]["token"] = self.co2token
-    cfg[self.LABEL]["country"] = self.co2country
+    cfg["token"] = self.co2token
+    cfg["country"] = self.co2country
     return cfg
 
   def set_config(self, config):
-    self.co2country = config["co2signal"]["country"]
-    self.co2token = config["co2signal"]["token"]
+    self.co2country = config["country"]
+    self.co2token = config["token"]
 
     if not self.co2token:
       print ("ERROR: Please specify CO2Signal API token!")
@@ -1253,6 +1280,12 @@ class CO2Signal(EmissionProvider):
          sys.exit(-1)
       
     self.update_url()
+
+  def remap(self, jsdict):
+    data = {}
+    for k, v in self.FIELD_MAP.items():
+      data[k] = jsdict[v]
+    return data
 
   def update_url(self):
     if not self.co2country.lower().startswith("auto"):
@@ -1268,26 +1301,25 @@ class CO2Signal(EmissionProvider):
     try:
       resp = urllib.request.urlopen(req).read()
       js = json.loads(resp)
-      data = js['data']
+      data = self.remap(js['data'])
     except:
       e = sys.exc_info()[0]
       print ("Exception: ", e)
       data = None
     return data
   
-class MockCO2Provider(EmissionProvider):
+class MockEcoProvider(EcoProvider):
   LABEL="mock"
   
-  def __init__(self, config):
-    EmissionProvider.__init__(self, config)
+  def __init__(self, config, glob_interval):
+    EcoProvider.__init__(self, config, glob_interval)
     self.co2file = None
     self.set_config(config)
 
   def get_config(self):
     cfg = super().get_config()
-    cfg[self.LABEL] = {}
-    cfg[self.LABEL]["co2range"] = "{0}-{1}".format(self.co2min, self.co2max)
-    cfg[self.LABEL]["co2file"] = self.co2file
+    cfg["co2range"] = "{0}-{1}".format(self.co2min, self.co2max)
+    cfg["co2file"] = self.co2file
     return cfg
 
   def set_config(self, config):
@@ -1370,6 +1402,54 @@ class MockCO2Provider(EmissionProvider):
     data[self.FIELD_FOSSIL_PCT] = fossil_pct
     data[self.FIELD_PRICE] = price_kwh
     return data
+  
+class EcoProviderManager(object):
+  PROV_DICT = {"co2signal" : CO2Signal, "mock" : MockEcoProvider, "const": ConstantProvider }
+
+  def __init__(self, config):
+    self.providers = {}
+    self.set_config(config)
+    
+  def info_string(self):
+    if self.providers:
+      s = [m + " = " + p.info_string() for m, p in self.providers.items()]
+      return  ", ".join(s)
+    else:
+      return "None"
+
+  def set_config(self, config):
+    self.interval = int(config["provider"]["interval"])
+    for metric in ["all", EcoProvider.FIELD_CO2, EcoProvider.FIELD_PRICE]:
+      if metric in config["provider"]:
+        p = config["provider"].get(metric)
+        if p in [None, "", "none", "off"]:
+          self.providers.pop(metric, None)
+        elif p.startswith("const:"):
+          cfg = { metric: p.strip("const:") }
+          self.providers[metric] = ConstantProvider(cfg, self.interval)
+        elif p in self.PROV_DICT:
+          self.providers[metric] = self.PROV_DICT[p](config[p], self.interval)  
+        else:
+          raise ValueError("Unknown emission provider: " + p)
+
+  def get_config(self, config={}):
+    config["provider"] = {}
+    config["provider"]["interval"] = self.interval
+    for metric in self.providers:
+      p = self.providers[metric]
+      config["provider"][metric] = p.cfg_string()
+      config[p.LABEL] = p.get_config()
+    return config
+
+  def get_data(self):
+    if "all" in self.providers:
+      return self.providers["all"].get_data()
+    else:
+      data = {}
+      for metric in [EcoProvider.FIELD_CO2, EcoProvider.FIELD_PRICE]:
+        if metric in self.providers:
+          data[metric] = self.providers[metric].get_field(metric)
+      return data
 
 class Governor(object):
   LABEL="None"
@@ -1758,11 +1838,11 @@ class EcoPolicyManager(object):
     
   def set_co2(self, co2_data):
     if self.metric == "price":
-      field = EmissionProvider.FIELD_PRICE
+      field = EcoProvider.FIELD_PRICE
     elif self.metric == "fossil_pct":
-      field = EmissionProvider.FIELD_FOSSIL_PCT
+      field = EcoProvider.FIELD_FOSSIL_PCT
     else:
-      field = EmissionProvider.FIELD_CO2
+      field = EcoProvider.FIELD_CO2
     if co2_data[field]:
       val = float(co2_data[field])
       for p in self.policies:
@@ -1889,7 +1969,7 @@ class EcoLogger(object):
     if self.idle_debug:
       cols += [stats["MaxSessions"], stats["MaxLoad"]]
     if self.co2_extra:
-      cols += [safe_round(co2_data[EmissionProvider.FIELD_CO2]), co2_data[EmissionProvider.FIELD_FOSSIL_PCT]]
+      cols += [safe_round(co2_data[EcoProvider.FIELD_CO2]), co2_data[EcoProvider.FIELD_FOSSIL_PCT]]
     if self.cost_fields:
       cols += [period_price, period_cost]
       
@@ -1907,7 +1987,7 @@ class EcoLogger(object):
 class EcoFreq(object):
   def __init__(self, config):
     self.config = config
-    self.co2provider = EmissionProvider.from_config(config)
+    self.co2provider = EcoProviderManager(config)
     self.co2policy = EcoPolicyManager(config)
     self.co2history = CO2History(config)
     self.co2logger = EcoLogger(config)
@@ -1926,8 +2006,8 @@ class EcoFreq(object):
     self.sample_interval = self.monitor.adjust_interval(self.co2provider.interval)
     # print("sampling intervals co2/energy:", self.co2provider.interval, self.sample_interval)
     self.last_co2_data = self.co2provider.get_data()
-    self.last_co2kwh = self.co2provider.get_co2(self.last_co2_data)
-    self.last_price = self.co2provider.get_price(self.last_co2_data)
+    self.last_co2kwh = self.last_co2_data.get(EcoProvider.FIELD_CO2, None)
+    self.last_price = self.last_co2_data.get(EcoProvider.FIELD_PRICE, None)
     self.total_co2 = 0.
     self.total_cost = 0.
     self.start_date = datetime.now()
@@ -1954,14 +2034,14 @@ class EcoFreq(object):
     EcoFreq.print_info(info)
     
   def reset_co2provider(self, cfg):
-    self.co2provider = EmissionProvider.from_config(cfg)
+    self.co2provider = EcoProviderManager(cfg)
     self.co2provider_updated = True
     self.co2logger.print_cmd("set_provider")
     
   def update_co2(self):
     # fetch new co2 intensity 
     co2_data = self.co2provider.get_data()
-    co2 = self.co2provider.get_co2(co2_data)
+    co2 = co2_data.get(EcoProvider.FIELD_CO2, None)
     if co2:
       if self.last_co2kwh:
         self.period_co2kwh = 0.5 * (co2 + self.last_co2kwh)
@@ -1971,7 +2051,7 @@ class EcoFreq(object):
       self.period_co2kwh = self.last_co2kwh
       self.last_co2kwh = co2
 
-    price_kwh = self.co2provider.get_price(co2_data)
+    price_kwh = co2_data.get(EcoProvider.FIELD_PRICE, None)
     if price_kwh:
       if self.last_price:
         self.period_price = self.last_price
@@ -2080,9 +2160,8 @@ def parse_args():
   return args
 
 def read_config(args):
-  def_dict = {'general' :  { 'LogFile'    : LOG_FILE    },
-              'emission' : { 'Provider'    : 'co2signal',
-                             'Interval'    : '600'     },
+  def_dict = {'general' :  { 'LogFile'     : LOG_FILE    },
+              'provider' : { 'Interval'    : '600'     },
               'policy'   : { 'Control'     : 'auto',    
                              'Governor'    : 'linear', 
                              'CO2Range'    : 'auto'    },        
@@ -2099,7 +2178,7 @@ def read_config(args):
     print("ERROR: Config file not found: ", cfg_file)
     sys.exit(-1)
 
-  parser = configparser.ConfigParser()
+  parser = configparser.ConfigParser(allow_no_value=True)
   parser.read_dict(def_dict)
   parser.read(cfg_file)
  
