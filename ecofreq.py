@@ -1184,6 +1184,10 @@ class EcoProvider(object):
   FIELD_CO2='co2'
   FIELD_PRICE='price'
   FIELD_FOSSIL_PCT='fossil_pct'
+  PRICE_UNITS= {"ct/kWh": 1.,
+                "eur/kWh": 100.,
+                "eur/mwh": 0.1,
+                }
   
   def __init__(self, config, glob_interval):
     if "interval" in config:
@@ -1307,6 +1311,78 @@ class CO2Signal(EcoProvider):
       print ("Exception: ", e)
       data = None
     return data
+
+class AwattarProvider(EcoProvider):
+  LABEL="awattar"
+  URL_BASE = "https://api.awattar.{0}/v1/marketdata"
+  FIELD_MAP = {EcoProvider.FIELD_PRICE: "marketprice"}
+  
+  def __init__(self, config, glob_interval):
+    EcoProvider.__init__(self, config, glob_interval)
+    self.set_config(config)
+    self.cached_data = []
+    
+  def get_config(self):
+    cfg = super().get_config()
+    cfg["country"] = self.country
+    return cfg
+
+  def set_config(self, config):
+    self.country = config["country"]
+    self.token = config.get("token", None)
+    self.fixed_price = float(config.get("fixedprice", 0.))
+    self.vat = float(config.get("vat", 0.))
+    self.update_url()
+
+  def remap(self, jsdata):
+    data = {}
+    ts = time.time() * 1000
+#    print(ts)
+    tsrec = None
+    for jsrec in jsdata:
+      if ts >= float(jsrec["start_timestamp"]) and  ts <= float(jsrec["end_timestamp"]): 
+        tsrec = jsrec
+        break
+    if not tsrec:
+      return None
+#    print(tsrec)
+    for k, v in self.FIELD_MAP.items():
+      data[k] = tsrec[v]
+    unit = tsrec['unit'].lower()   
+    data[EcoProvider.FIELD_PRICE] *= EcoProvider.PRICE_UNITS.get(unit, 1)  
+    data[EcoProvider.FIELD_PRICE] *= (1.0 + self.vat)
+    data[EcoProvider.FIELD_PRICE] += self.fixed_price
+#    print(data)
+    return data
+
+  def update_url(self):
+    if self.country.lower() in ["de", "at"]:
+      self.api_url = self.URL_BASE.format(self.country.lower())
+    else:
+      raise ValueError("Country not supported: " + self.country)
+
+  def fetch_data(self):
+    req = urllib.request.Request(self.api_url)
+    req.add_header("User-Agent", "Mozilla/5.0 (X11; U; Linux i686) Gecko/20071127 Firefox/2.0.0.11")
+    if self.token:
+      req.add_header("auth-token", self.token)
+
+    try:
+      resp = urllib.request.urlopen(req).read()
+      js = json.loads(resp)
+      self.cached_data = js['data']
+    except:
+      e = sys.exc_info()[0]
+      print ("Exception: ", e)
+      data = None
+
+  def get_data(self):
+      data = self.remap(self.cached_data)
+      if not data:
+        self.fetch_data()
+        data = self.remap(self.cached_data)
+      return data
+    
   
 class MockEcoProvider(EcoProvider):
   LABEL="mock"
@@ -1404,7 +1480,7 @@ class MockEcoProvider(EcoProvider):
     return data
   
 class EcoProviderManager(object):
-  PROV_DICT = {"co2signal" : CO2Signal, "mock" : MockEcoProvider, "const": ConstantProvider }
+  PROV_DICT = {"co2signal" : CO2Signal, "awattar": AwattarProvider, "mock" : MockEcoProvider, "const": ConstantProvider }
 
   def __init__(self, config):
     self.providers = {}
@@ -1770,9 +1846,9 @@ class GPUPowerEcoPolicy(GPUEcoPolicy):
       sys.exit(-1)
 
     plinfo = NvidiaGPUHelper.get_power_limit_all() 
-    self.pmin = plinfo[0][0]
-    self.pmax = plinfo[0][1]
-    self.pstart = plinfo[0][2]
+    self.pmin = float(plinfo[0][0])
+    self.pmax = float(plinfo[0][1])
+    self.pstart = float(plinfo[0][2])
     self.init_governor(config, self.pmin, self.pmax, 0)
 
   def set_power(self, power_w):
@@ -1917,7 +1993,7 @@ class EcoLogger(object):
     self.fmt = NAFormatter()
     self.idle_fields = False
     self.idle_debug = False
-    self.cost_fields = config["general"].get("logcost", False)
+    self.cost_fields = config["general"].get("logcost", True)
     self.co2_extra = config["general"].get("logco2extra", False)
     
   def init_fields(self, monitors):
