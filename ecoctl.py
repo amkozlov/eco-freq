@@ -79,19 +79,24 @@ def provider_str(prov):
   
 def cmd_policy(args):
   policy = ec.get_policy()
-  
+
   if len(args.cmd_args) > 0:
     # set policy
     print("Old policy:", policy_str(policy))
     gov = args.cmd_args[0]
+    domain = "cpu"
+    if gov.startswith("cpu:") or gov.startswith("gpu:"):
+      domain, gov = gov.split(":", 1)
+      if not domain in policy["co2policy"]:
+        policy["co2policy"][domain] = {}
     if gov.startswith("co2:") or gov.startswith("price:") or gov.startswith("fossil_pct:"):
       metric, gov = gov.split(":", 1)
-      policy["co2policy"]["cpu"]["metric"] = metric
+      policy["co2policy"][domain]["metric"] = metric
     if gov in ["off", "disabled"]:
       gov = "none"
     elif gov in ["on", "enabled", "default", "eco"]:
       gov = "default"
-    policy["co2policy"]["cpu"]["governor"] = gov
+    policy["co2policy"][domain]["governor"] = gov
     ret = ec.set_policy(policy)
   
     policy = ec.get_policy()

@@ -168,7 +168,7 @@ class EcoFreqController(object):
 #    print(old_cfg)
     new_cfg = {}
     for domain in args["co2policy"].keys():
-      new_cfg[domain] = old_cfg
+      new_cfg[domain] = copy.deepcopy(old_cfg)
       new_cfg[domain].update(args["co2policy"][domain])
       # all domains use the same metric for now
       new_cfg["metric"] = args["co2policy"][domain]["metric"]
@@ -1539,12 +1539,12 @@ class Governor(object):
   def info_string(self, unit={"": 1}):
     args = [self.LABEL]
     d = self.info_args()
+    uname, ufactor = list(unit.items())[0]
     for k in sorted(d.keys()):
       if d[k]:
-        uname, ufactor = list(unit.items())[0]
         arg = "{0}={1}{2}".format(k, d[k] / ufactor, uname)
       else:
-        arg = str(k)
+        arg = "{0}{1}".format(k / ufactor, uname)
       args.append(arg)
     return ":".join(args)
   
@@ -1817,7 +1817,15 @@ class GPUEcoPolicy(EcoPolicy):
     if not config:
       return None
     
-    c = config["control"].lower()
+    # first, check if we have a specific EcoPolicy class
+    c = config["control"]
+    if c in globals():
+      cls = globals()[c]
+      if isclass(cls) and issubclass(cls, GPUEcoPolicy):
+        return cls(config)
+
+    # otherwise, look for a generic policy type
+    c = c.lower()
     if c == "auto":
       if NvidiaGPUHelper.available():
         c = "power"
@@ -1908,7 +1916,7 @@ class EcoPolicyManager(object):
         domain = "cpu"
       elif issubclass(type(p), GPUEcoPolicy):
         domain = "gpu"
-      res[domain] = p.get_config()
+      res[domain] = p.get_config({})
       res[domain]["metric"] = self.metric
     return res
     

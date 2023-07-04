@@ -17,12 +17,18 @@ def set_governor(gov):
   try:
     ec = EcoClient()
     policy = ec.get_policy()
-    old_gov = policy["co2policy"]["cpu"]["governor"]
+    domain = "cpu"
+    if gov.startswith("cpu:") or gov.startswith("gpu:"):
+      domain, gov = gov.split(":", 1)
+      if not domain in policy["co2policy"]:
+        policy["co2policy"][domain] = {}
+
+    old_gov = policy["co2policy"][domain]["governor"]
     if gov.startswith("co2:") or gov.startswith("price:") or gov.startswith("fossil_pct:"):
-      old_gov = ":".join([policy["co2policy"]["cpu"]["metric"], old_gov])
+      old_gov = ":".join([policy["co2policy"][domain]["metric"], old_gov])
       metric, gov = gov.split(":", 1)
-      policy["co2policy"]["cpu"]["metric"] = metric
-    policy["co2policy"]["cpu"]["governor"] = gov
+      policy["co2policy"][domain]["metric"] = metric
+    policy["co2policy"][domain]["governor"] = gov
     ret = ec.set_policy(policy)
     return old_gov
   except ConnectionRefusedError:
