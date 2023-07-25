@@ -351,6 +351,13 @@ class CpuInfoHelper(object):
       return cpuinfo
     except CalledProcessError:
       return None  
+
+  @classmethod
+  def get_cores(cls):
+    cpuinfo = cls.parse_lscpu()
+    threads = int(cpuinfo["CPU(s)"])
+    cores = int(threads / int(cpuinfo["Thread(s) per core"]))
+    return cores
     
   @classmethod
   def get_tdp_uw(cls):
@@ -708,6 +715,61 @@ class AMDRaplMsrHelper(object):
   def get_core_energy_range(cls, cpu):
     filename = cls.cpu_msr_file(cpu)
     return cls.get_energy_range(filename)
+
+class LinuxCgroupV1Helper(object):
+  CGROUP_FS_PATH="/sys/fs/cgroup/"
+  PROCS_FILE="cgroup.procs"
+  CFS_QUOTA_FILE="cpu.cfs_quota_us"
+  CFS_PERIOD_FILE="cpu.cfs_period_us"
+
+  @classmethod
+  def subsys_path(cls, sub):
+    return os.path.join(cls.CGROUP_FS_PATH, sub)
+
+  @classmethod
+  def subsys_file(cls, sub, grp, fname):
+    return os.path.join(cls.subsys_path(sub), grp, fname)
+
+  @classmethod
+  def procs_file(cls, sub, grp):
+    return cls.subsys_file(sub, grp, cls.PROCS_FILE)
+
+  @classmethod
+  def cfs_quota_file(cls, grp):
+    return cls.subsys_file("cpu", grp, cls.CFS_QUOTA_FILE)
+
+  @classmethod
+  def cfs_period_file(cls, grp):
+    return cls.subsys_file("cpu", grp, cls.CFS_PERIOD_FILE)
+
+  @classmethod
+  def read_cgroup_int(cls, sub, grp, fname):
+    return read_int_value(cls.subsys_file(sub, grp, fname))
+  
+  @classmethod
+  def get_cpu_cfs_period_us(cls, grp):
+    return read_int_value(cls.cfs_period_file(grp))
+
+  @classmethod
+  def get_cpu_cfs_quota_us(cls, grp):
+    return read_int_value(cls.cfs_quota_file(grp))
+
+  @classmethod
+  def set_cpu_cfs_quota_us(cls, grp, quota):
+    write_value(cls.cfs_quota_file(grp), int(quota))
+    
+  @classmethod
+  def add_proc_to_cgroup(cls, grp, pid):
+    write_value(cls.procs_file(grp), pid)
+
+  @classmethod
+  def available(cls):
+    return os.path.exists(cls.CGROUP_FS_PATH)
+
+  @classmethod
+  def enabled(cls, sub="cpu", grp=""):
+    return os.path.isfile(cls.procs_file(sub, grp))
+
 
 class IPMIHelper(object):
   @classmethod
@@ -1742,7 +1804,9 @@ class CPUEcoPolicy(EcoPolicy):
       return CPUPowerEcoPolicy(config)
     elif c == "frequency":
       return CPUFreqEcoPolicy(config)
-    elif c in OPTION_DISABLED or t in OPTION_DISABLED:
+    elif c == "cgroup":
+      return CPUCgroupEcoPolicy(config)
+    elif c in OPTION_DISABLED:
       return None
     else:
       raise ValueError("Unknown policy: " + c)
@@ -1808,6 +1872,40 @@ class CPUPowerEcoPolicy(CPUEcoPolicy):
   def reset(self):
     self.set_power(self.pmax)
 
+class CPUCgroupEcoPolicy(CPUEcoPolicy):
+  UNIT={"c": 100000}
+
+  def __init__(self, config):
+    EcoPolicy.__init__(self, config)
+    
+    if not LinuxCgroupV1Helper.available():
+      print ("ERROR: Linux cgroup filesystem not mounted!")
+      sys.exit(-1)
+
+    if not LinuxCgroupV1Helper.enabled():
+      print ("ERROR: Linux cgroup subsystem is not properly configured!")
+      sys.exit(-1)
+
+    self.grp = "user.slice" if "cgroup" not in config else config["cgroup"]
+    num_cores = CpuInfoHelper.get_cores()
+    cfs_period = LinuxCgroupV1Helper.get_cpu_cfs_period_us(self.grp)
+    self.qmax = cfs_period * num_cores
+    self.qmin = int(0.1 * cfs_period)
+    self.qstart = LinuxCgroupV1Helper.get_cpu_cfs_quota_us(self.grp)
+    self.init_governor(config, self.qmin, self.qmax)
+
+  def set_quota(self, quota_us):
+    if quota_us and not self.debug:
+      LinuxCgroupV1Helper.set_cpu_cfs_quota_us(self.grp, quota_us)
+
+  def set_co2(self, co2):
+    self.quota = self.co2val(co2)
+#    print("Update policy co2 -> power: ", co2, "->", self.power)
+    self.set_quota(self.quota)
+
+  def reset(self):
+    self.set_quota(self.qmax)
+
 class GPUEcoPolicy(EcoPolicy):
   def __init__(self, config):
     EcoPolicy.__init__(self, config)
@@ -1838,7 +1936,10 @@ class GPUEcoPolicy(EcoPolicy):
       return GPUPowerEcoPolicy(config)
 #    elif c == "frequency":
 #      return CPUFreqEcoPolicy(config)
-    elif c in OPTION_DISABLED or t in OPTION_DISABLED:
+    elif c == "cgroup":
+      # cgroup currently does not support GPUs, so let's rely on CPU scaling 
+      return None
+    elif c in OPTION_DISABLED:
       return None
     else:
       raise ValueError("Unknown policy: " + c)
