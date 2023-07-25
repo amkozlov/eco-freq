@@ -721,6 +721,7 @@ class LinuxCgroupV1Helper(object):
   PROCS_FILE="cgroup.procs"
   CFS_QUOTA_FILE="cpu.cfs_quota_us"
   CFS_PERIOD_FILE="cpu.cfs_period_us"
+  FREEZER_STATE_FILE="freezer.state"
 
   @classmethod
   def subsys_path(cls, sub):
@@ -743,6 +744,10 @@ class LinuxCgroupV1Helper(object):
     return cls.subsys_file("cpu", grp, cls.CFS_PERIOD_FILE)
 
   @classmethod
+  def freezer_state_file(cls, grp):
+    return cls.subsys_file("freezer", grp, cls.FREEZER_STATE_FILE)
+
+  @classmethod
   def read_cgroup_int(cls, sub, grp, fname):
     return read_int_value(cls.subsys_file(sub, grp, fname))
   
@@ -757,6 +762,14 @@ class LinuxCgroupV1Helper(object):
   @classmethod
   def set_cpu_cfs_quota_us(cls, grp, quota):
     write_value(cls.cfs_quota_file(grp), int(quota))
+
+  @classmethod
+  def freeze(cls, grp):
+    write_value(cls.freezer_state_file(grp), "FROZEN")
+
+  @classmethod
+  def unfreeze(cls, grp):
+    write_value(cls.freezer_state_file(grp), "THAWED")
     
   @classmethod
   def add_proc_to_cgroup(cls, grp, pid):
@@ -1462,9 +1475,8 @@ class MockEcoProvider(EcoProvider):
 
   def set_config(self, config):
     co2range = '100-800'
-    if self.LABEL in config:
-      co2range = config[self.LABEL].get('co2range', co2range)
-      self.co2file = config[self.LABEL].get('co2file', None)
+    co2range = config.get('co2range', co2range)
+    self.co2file = config.get('co2file', None)
     self.co2min, self.co2max = [int(x) for x in co2range.split("-")]
     self.read_co2_file()
 
@@ -1566,7 +1578,11 @@ class EcoProviderManager(object):
           cfg = { metric: p.strip("const:") }
           self.providers[metric] = ConstantProvider(cfg, self.interval)
         elif p in self.PROV_DICT:
-          self.providers[metric] = self.PROV_DICT[p](config[p], self.interval)  
+          try:
+            cfg = config[p]
+          except KeyError:
+            cfg = {}
+          self.providers[metric] = self.PROV_DICT[p](cfg, self.interval)  
         else:
           raise ValueError("Unknown emission provider: " + p)
 
@@ -1887,6 +1903,8 @@ class CPUCgroupEcoPolicy(CPUEcoPolicy):
       sys.exit(-1)
 
     self.grp = "user.slice" if "cgroup" not in config else config["cgroup"]
+    self.use_freeze = True if "cgroupfreeze" not in config else config["cgroupfreeze"]
+    self.use_freeze = self.use_freeze and LinuxCgroupV1Helper.enabled("freezer", self.grp)
     num_cores = CpuInfoHelper.get_cores()
     cfs_period = LinuxCgroupV1Helper.get_cpu_cfs_period_us(self.grp)
     self.qmax = cfs_period * num_cores
@@ -1895,6 +1913,12 @@ class CPUCgroupEcoPolicy(CPUEcoPolicy):
     self.init_governor(config, self.qmin, self.qmax)
 
   def set_quota(self, quota_us):
+    if self.use_freeze:
+      if quota_us == self.qmin:
+        LinuxCgroupV1Helper.freeze(self.grp)
+        return
+      else:
+        LinuxCgroupV1Helper.unfreeze(self.grp)
     if quota_us and not self.debug:
       LinuxCgroupV1Helper.set_cpu_cfs_quota_us(self.grp, quota_us)
 
