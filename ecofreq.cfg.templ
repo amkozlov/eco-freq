@@ -5,6 +5,8 @@
 co2=co2signal
 # fixed energy price: 30 ct/kWh
 price=const:30
+# Variable price with Tibber, please add API token below
+#price=tibber
 Interval=600
 
 [co2signal]
@@ -12,6 +14,10 @@ Interval=600
 Token=<CO2TOKEN>
 #Please look up your grid zone here: https://www.electricitymap.org
 Country=<CO2COUNTRY>
+
+[tibber]
+Token=TIBBER_TOKEN
+#UseCache=True
 
 [policy]
 Control=auto

@@ -18,6 +18,7 @@ import copy
 from math import ceil
 from inspect import isclass
 from _collections import deque
+from click.types import DateTime
 
 HOMEDIR = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = "/var/log/ecofreq.log"
@@ -1258,6 +1259,7 @@ class EcoProvider(object):
   LABEL=None
   FIELD_CO2='co2'
   FIELD_PRICE='price'
+  FIELD_TAX='tax'
   FIELD_FOSSIL_PCT='fossil_pct'
   PRICE_UNITS= {"ct/kWh": 1.,
                 "eur/kWh": 100.,
@@ -1387,6 +1389,81 @@ class CO2Signal(EcoProvider):
       data = None
     return data
 
+class TibberProvider(EcoProvider):
+  LABEL="tibber"
+  URL_BASE="https://api.tibber.com/v1-beta/gql"
+  QUERY_PRICE='{ "query": "{viewer {homes {currentSubscription {priceInfo {%period% {total energy tax startsAt }}}}}}" }'
+  FIELD_MAP = {EcoProvider.FIELD_PRICE: "total", EcoProvider.FIELD_TAX: "tax"}
+
+  def __init__(self, config, glob_interval):
+    EcoProvider.__init__(self, config, glob_interval)
+    self.set_config(config)
+    self.cached_data = None
+
+  def get_config(self):
+    cfg = super().get_config()
+    cfg["token"] = self.token
+    cfg["usecache"] = self.use_cache
+    return cfg
+
+  def set_config(self, config):
+    self.token = config.get("token", None)
+    self.use_cache = config.get("usecache", False)
+    self.query_period = "today" if self.use_cache else "current"
+    self.api_url = self.URL_BASE
+    self.query = self.QUERY_PRICE.replace("%period%", self.query_period)
+    
+  def remap(self, jsdata):
+    if not jsdata:
+      return None
+    data = {}
+#    print(jsdata)
+    jsprice = jsdata["viewer"]["homes"][0]["currentSubscription"]["priceInfo"][self.query_period] 
+    ts = time.time()
+#    print(ts)
+    if self.use_cache:
+      tsrec = None
+      for jsrec in jsprice:
+        t =  datetime.fromisoformat(jsrec["startsAt"]).timestamp()
+        if ts >= t and  ts <= t + 3600: 
+          tsrec = jsrec
+          break
+    else:
+       tsrec = jsprice   
+    if not tsrec:
+      return None
+#    print(tsrec)
+    for k, v in self.FIELD_MAP.items():
+      data[k] = tsrec[v]
+#    print(data)
+    return data
+
+  def fetch_data(self):
+    req = urllib.request.Request(self.api_url)
+    req.add_header("User-Agent", "Mozilla/5.0 (X11; U; Linux i686) Gecko/20071127 Firefox/2.0.0.11")
+    req.add_header("Content-Type", "application/json")
+    if self.token:
+      req.add_header("Authorization", self.token)
+
+    try:
+      resp = urllib.request.urlopen(req, data=self.query.encode("utf-8")).read()
+      js = json.loads(resp)
+#      print(js)
+      self.cached_data = js['data']
+    except:
+      e = sys.exc_info()
+      print ("Exception: ", e)
+      data = None
+
+  def get_data(self):
+      if not self.use_cache:
+        self.fetch_data()
+      data = self.remap(self.cached_data)
+      if not data:
+        self.fetch_data()
+        data = self.remap(self.cached_data)
+      return data
+
 class AwattarProvider(EcoProvider):
   LABEL="awattar"
   URL_BASE = "https://api.awattar.{0}/v1/marketdata"
@@ -1415,7 +1492,7 @@ class AwattarProvider(EcoProvider):
 #    print(ts)
     tsrec = None
     for jsrec in jsdata:
-      if ts >= float(jsrec["start_timestamp"]) and  ts <= float(jsrec["end_timestamp"]): 
+      if ts >= datetime.strptime(jsrec["start_timestamp"]) and  ts <= float(jsrec["end_timestamp"]): 
         tsrec = jsrec
         break
     if not tsrec:
@@ -1554,7 +1631,11 @@ class MockEcoProvider(EcoProvider):
     return data
   
 class EcoProviderManager(object):
-  PROV_DICT = {"co2signal" : CO2Signal, "awattar": AwattarProvider, "mock" : MockEcoProvider, "const": ConstantProvider }
+  PROV_DICT = {"co2signal" : CO2Signal, 
+               "tibber": TibberProvider, 
+               "awattar": AwattarProvider, 
+               "mock" : MockEcoProvider, 
+               "const": ConstantProvider }
 
   def __init__(self, config):
     self.providers = {}
