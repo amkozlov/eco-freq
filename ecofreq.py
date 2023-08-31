@@ -1389,6 +1389,75 @@ class CO2Signal(EcoProvider):
       data = None
     return data
 
+class UKGridProvider(EcoProvider):
+  LABEL="ukgrid"
+  URL_BASE = " https://api.carbonintensity.org.uk/"
+  URL_COUNTRY = URL_BASE + "intensity"
+  URL_REGIONAL = URL_BASE + "regional/"
+  URL_REGION = URL_REGIONAL + "regionid/{0}"
+  URL_POSTCODE = URL_REGIONAL + "postcode/{0}"
+  FIELD_MAP = {EcoProvider.FIELD_CO2: "forecast"}
+  
+  def __init__(self, config, glob_interval):
+    EcoProvider.__init__(self, config, glob_interval)
+    self.set_config(config)
+    
+  def get_config(self):
+    cfg = super().get_config()
+    if self.region:
+      cfg["regionid"] = self.region
+    if self.postcode:
+      cfg["postcode"] = self.postcode
+    return cfg
+
+  def set_config(self, config):
+    self.region = config.get("regionid", None)
+    self.postcode = config.get("postcode", None)
+    self.update_url()
+
+  def remap(self, jsdict):
+#    print(jsdict)
+    data = {}
+    jsdata = jsdict[0]
+    if "data" in jsdata:
+      jsdata = jsdata["data"][0]
+    jsci = jsdata["intensity"]  
+    for k, v in self.FIELD_MAP.items():
+      data[k] = jsci[v]
+#    print(jsdata)
+    if "generationmix" in jsdata:
+      fossil_pct = 0
+      for f in jsdata["generationmix"]:
+        if f["fuel"] in ["coal", "gas", "other"]:
+          fossil_pct += float(f["perc"])
+      data[EcoProvider.FIELD_FOSSIL_PCT] = fossil_pct
+#      print(fossil_pct)
+    return data
+
+  def update_url(self):
+    if self.postcode:
+      self.api_url = self.URL_POSTCODE.format(self.postcode)
+    elif self.region:
+      self.api_url = self.URL_REGION.format(self.region)
+    else:
+      self.api_url = self.URL_COUNTRY
+
+  def get_data(self):
+    req = urllib.request.Request(self.api_url)
+    req.add_header("User-Agent", "Mozilla/5.0 (X11; U; Linux i686) Gecko/20071127 Firefox/2.0.0.11")
+    req.add_header("Accept", "application/json")
+
+    try:
+      resp = urllib.request.urlopen(req).read()
+      js = json.loads(resp)
+      data = self.remap(js['data'])
+    except:
+      e = sys.exc_info()
+      print ("Exception: ", e)
+      data = None
+    return data
+
+
 class TibberProvider(EcoProvider):
   LABEL="tibber"
   URL_BASE="https://api.tibber.com/v1-beta/gql"
@@ -1632,6 +1701,7 @@ class MockEcoProvider(EcoProvider):
   
 class EcoProviderManager(object):
   PROV_DICT = {"co2signal" : CO2Signal, 
+               "ukgrid": UKGridProvider, 
                "tibber": TibberProvider, 
                "awattar": AwattarProvider, 
                "mock" : MockEcoProvider, 
