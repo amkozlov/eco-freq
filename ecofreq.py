@@ -1533,6 +1533,88 @@ class TibberProvider(EcoProvider):
         data = self.remap(self.cached_data)
       return data
 
+
+class OctopusProvider(EcoProvider):
+  LABEL="octopus"
+  URL_BASE="https://api.octopus.energy"
+  URL_PRODUCT=URL_BASE+"/v1/products/{}"
+  URL_TARRIF=URL_PRODUCT+"/electricity-tariffs/{}"
+  URL_PRICE=URL_TARRIF+"/standard-unit-rates"
+  FIELD_MAP = {EcoProvider.FIELD_PRICE: "value_inc_vat"}
+
+  def __init__(self, config, glob_interval):
+    EcoProvider.__init__(self, config, glob_interval)
+    self.set_config(config)
+    self.cached_data = None
+
+  def get_config(self):
+    cfg = super().get_config()
+    cfg["token"] = self.token
+    cfg["product"] = self.product
+    cfg["tariff"] = self.tariff
+    cfg["usecache"] = self.use_cache
+    return cfg
+
+  def set_config(self, config):
+    self.token = config.get("token", None)
+    self.product = config.get("product", None)
+    self.tariff = config.get("tariff", None)
+    self.use_cache = config.get("usecache", True)
+    self.update_url()
+    
+  def update_url(self):
+    self.api_url = self.URL_PRICE.format(self.product, self.tariff)
+    
+  def remap(self, jsdata):
+    if not jsdata:
+      return None
+    data = {}
+#    print(jsdata)
+    jsprice = jsdata["results"] 
+    ts = datetime.utcnow()
+#    print(ts)
+    tsrec = None
+    for jsrec in jsprice:
+      ts_from = datetime.fromisoformat(jsrec["valid_from"].replace('Z', '' ))
+      ts_to = datetime.fromisoformat(jsrec["valid_to"].replace('Z', '' ))
+      if ts >= ts_from and  ts <= ts_to: 
+        tsrec = jsrec
+        break
+    if not tsrec:
+      return None
+#    print(tsrec)
+    for k, v in self.FIELD_MAP.items():
+      data[k] = tsrec[v]
+#    print(data)
+    return data
+
+  def fetch_data(self):
+    req = urllib.request.Request(self.api_url)
+    req.add_header("User-Agent", "Mozilla/5.0 (X11; U; Linux i686) Gecko/20071127 Firefox/2.0.0.11")
+    req.add_header("Content-Type", "application/json")
+    if self.token:
+      base64string = base64.b64encode('%s:%s' % (self.token, ""))
+      req.add_header("Authorization", "Basic %s" % base64string)  
+
+    try:
+      resp = urllib.request.urlopen(req).read()
+      js = json.loads(resp)
+#      print(js)
+      self.cached_data = js
+    except:
+      e = sys.exc_info()
+      print ("Exception: ", e)
+      data = None
+
+  def get_data(self):
+      if not self.use_cache:
+        self.fetch_data()
+      data = self.remap(self.cached_data)
+      if not data:
+        self.fetch_data()
+        data = self.remap(self.cached_data)
+      return data
+
 class AwattarProvider(EcoProvider):
   LABEL="awattar"
   URL_BASE = "https://api.awattar.{0}/v1/marketdata"
@@ -1561,7 +1643,7 @@ class AwattarProvider(EcoProvider):
 #    print(ts)
     tsrec = None
     for jsrec in jsdata:
-      if ts >= datetime.strptime(jsrec["start_timestamp"]) and  ts <= float(jsrec["end_timestamp"]): 
+      if ts >= float(jsrec["start_timestamp"]) and  ts <= float(jsrec["end_timestamp"]): 
         tsrec = jsrec
         break
     if not tsrec:
@@ -1703,6 +1785,7 @@ class EcoProviderManager(object):
   PROV_DICT = {"co2signal" : CO2Signal, 
                "ukgrid": UKGridProvider, 
                "tibber": TibberProvider, 
+               "octopus": OctopusProvider, 
                "awattar": AwattarProvider, 
                "mock" : MockEcoProvider, 
                "const": ConstantProvider }
@@ -2553,7 +2636,7 @@ def read_config(args):
   return parser
 
 def diag():
-  print("EcoFreq v0.0.1 (c) 2021 Alexey Kozlov\n")
+  print("EcoFreq v0.0.1 (c) 2023 Oleksiy Kozlov\n")
   CpuInfoHelper.info()
   print("")
   LinuxPowercapHelper.info()
