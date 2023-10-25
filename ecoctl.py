@@ -89,6 +89,9 @@ def cmd_policy(args):
       domain, gov = gov.split(":", 1)
       if not domain in policy["co2policy"]:
         policy["co2policy"][domain] = {}
+    if gov.startswith("frequency:") or gov.startswith("power:") or gov.startswith("cgroup:"):
+      control, gov = gov.split(":", 1)
+      policy["co2policy"][domain]["control"] = control
     if gov.startswith("co2:") or gov.startswith("price:") or gov.startswith("fossil_pct:"):
       metric, gov = gov.split(":", 1)
       policy["co2policy"][domain]["metric"] = metric
