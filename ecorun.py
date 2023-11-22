@@ -10,8 +10,8 @@ from ecofreq import EcoClient
 
 def read_shm():
   with open(SHM_FILE) as f:
-    joules, co2, cost = [float(x) for x in f.readline().split(" ")]
-  return joules, co2, cost
+    ts, joules, co2, cost = [float(x) for x in f.readline().split(" ")]
+  return ts, joules, co2, cost
 
 def set_governor(gov):
   try:
@@ -72,7 +72,7 @@ if __name__ == '__main__':
  
   cmdline = sys.argv[cmdline_start:]
   
-  start_joules, start_co2, start_cost = read_shm()
+  start_ts, start_joules, start_co2, start_cost = read_shm()
   
   start_time = time.time()
 
@@ -82,7 +82,7 @@ if __name__ == '__main__':
 
   end_time = time.time()
 
-  end_joules, end_co2, end_cost = read_shm()
+  start_ts, end_joules, end_co2, end_cost = read_shm()
   
   if old_gov:
     set_governor(old_gov)

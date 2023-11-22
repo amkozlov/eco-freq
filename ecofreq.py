@@ -2535,6 +2535,7 @@ class EcoFreq(object):
     self.last_price = price_kwh
     
   def write_shm(self):  
+    ts = datetime.now().timestamp()
     energy_j = str(round(self.monitor.get_total_energy(), 3))
     co2_g = self.total_co2
     cost = self.total_cost
@@ -2545,10 +2546,11 @@ class EcoFreq(object):
       if self.last_price:
         cost += period_energy * self.last_price / JOULES_IN_KWH
         
+    ts = str(round(ts))
     co2_g = str(round(co2_g, 3))
     cost = str(round(cost, 3))
     with open(SHM_FILE, "w") as f:
-      f.write(" ".join([energy_j, co2_g, cost]))
+      f.write(" ".join([ts, energy_j, co2_g, cost]))
 
   async def spin(self):
     try:
