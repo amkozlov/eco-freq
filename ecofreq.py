@@ -1261,6 +1261,7 @@ class EcoProvider(object):
   FIELD_PRICE='price'
   FIELD_TAX='tax'
   FIELD_FOSSIL_PCT='fossil_pct'
+  FIELD_INDEX='index'
   PRICE_UNITS= {"ct/kWh": 1.,
                 "eur/kWh": 100.,
                 "eur/mwh": 0.1,
@@ -1396,7 +1397,7 @@ class UKGridProvider(EcoProvider):
   URL_REGIONAL = URL_BASE + "regional/"
   URL_REGION = URL_REGIONAL + "regionid/{0}"
   URL_POSTCODE = URL_REGIONAL + "postcode/{0}"
-  FIELD_MAP = {EcoProvider.FIELD_CO2: "forecast"}
+  FIELD_MAP = {EcoProvider.FIELD_CO2: "forecast", EcoProvider.FIELD_INDEX: "index"}
   
   def __init__(self, config, glob_interval):
     EcoProvider.__init__(self, config, glob_interval)
@@ -1715,8 +1716,10 @@ class MockEcoProvider(EcoProvider):
       self.co2queue = deque()
       self.fossil_queue = deque()
       self.price_queue = deque()
+      self.index_queue = deque()
       co2_field = 0
       fossil_field = 1
+      index_field = -1
       with open(self.co2file) as f:
         for line in f:
           if line.startswith("##"):
@@ -1739,6 +1742,10 @@ class MockEcoProvider(EcoProvider):
               price_factor = 0.1
             else:
               price_field = -1
+            if 'co2index' in toks:  
+              index_field = toks.index('co2index')
+            elif 'Index' in toks:
+              index_field = toks.index('Index')
           else:  
             toks = line.split("\t")
             co2 = None if toks[co2_field].strip() == "NA" else float(toks[co2_field])
@@ -1749,10 +1756,14 @@ class MockEcoProvider(EcoProvider):
             if price_field >= 0 and price_field < len(toks):
               price_kwh = None if toks[price_field].strip() == "NA" else float(toks[price_field]) * price_factor
               self.price_queue.append(price_kwh)
+            if index_field >= 0 and index_field < len(toks):
+              index = None if toks[index_field].strip() == "NA" else toks[index_field].strip()
+              self.index_queue.append(index)
     else:
       self.co2queue = None
       self.fossil_queue = None
       self.price_queue = None
+      self.index_queue = None
       
   def get_data(self):
     if self.co2queue and len(self.co2queue) > 0:
@@ -1774,11 +1785,18 @@ class MockEcoProvider(EcoProvider):
       self.price_queue.append(price_kwh)
     else:
       price_kwh = None
+
+    if self.index_queue and len(self.index_queue) > 0:
+      index = self.index_queue.popleft()
+      self.index_queue.append(index)
+    else:
+      index = None
       
     data = {}
     data[self.FIELD_CO2] = co2
     data[self.FIELD_FOSSIL_PCT] = fossil_pct
     data[self.FIELD_PRICE] = price_kwh
+    data[self.FIELD_INDEX] = index
     return data
   
 class EcoProviderManager(object):
@@ -1852,7 +1870,7 @@ class Governor(object):
     args = [self.LABEL]
     d = self.info_args()
     uname, ufactor = list(unit.items())[0]
-    for k in sorted(d.keys()):
+    for k in d.keys():
       if d[k]:
         arg = "{0}={1}{2}".format(k, d[k] / ufactor, uname)
       else:
@@ -1910,6 +1928,8 @@ class Governor(object):
       return LinearGovernor(args, vmin, vmax, units)
     elif t == "step":
       return StepGovernor(args, vmin, vmax, units)
+    elif t == "list":
+      return ListGovernor(args, vmin, vmax, units)
     elif t == "maxperf":
       args = {}
       return ConstantGovernor(args, vmin, vmax, units)
@@ -1961,6 +1981,7 @@ class LinearGovernor(Governor):
     return args 
 
   def co2val(self, co2):
+    co2 = float(co2)
     if co2 >= self.co2max:
       k = 0.0
     elif co2 <= self.co2min:
@@ -1974,12 +1995,17 @@ class LinearGovernor(Governor):
 class StepGovernor(Governor):
   LABEL="step"
   
-  def __init__(self, args, vmin, vmax, units):
+  def __init__(self, args, vmin, vmax, units, discrete=False):
     Governor.__init__(self, args, vmin, vmax)
     self.vmin = vmin
     self.vmax = vmax
+    self.discrete = discrete
     self.steps = []
-    for s in sorted([int(x) for x in args.keys()], reverse=True):
+    if self.discrete:
+      klist = args.keys()
+    else:
+      klist = sorted([int(x) for x in args.keys()], reverse=True)
+    for s in klist:
       v = Governor.parse_val(args[str(s)], vmin, vmax, units)
       self.steps.append((s, v))
 
@@ -1992,11 +2018,17 @@ class StepGovernor(Governor):
   def co2val(self, co2):
     val = self.vmax
     for s, v in self.steps:
-      if co2 >= s:
+      if (self.discrete and co2 == s) or (not self.discrete and float(co2) >= s):
         val = v
         break 
     val = int(round(val, self.val_round))
     return val
+
+class ListGovernor(StepGovernor):
+  LABEL="list"
+
+  def __init__(self, args, vmin, vmax, units):
+    StepGovernor.__init__(self, args, vmin, vmax, units, True)
 
 class EcoPolicy(object):
   UNIT={}
@@ -2284,10 +2316,12 @@ class EcoPolicyManager(object):
       field = EcoProvider.FIELD_PRICE
     elif self.metric == "fossil_pct":
       field = EcoProvider.FIELD_FOSSIL_PCT
+    elif self.metric == "index":
+      field = EcoProvider.FIELD_INDEX
     else:
       field = EcoProvider.FIELD_CO2
     if co2_data[field]:
-      val = float(co2_data[field])
+      val = co2_data[field]
       for p in self.policies:
         p.set_co2(val)
 
@@ -2373,7 +2407,7 @@ class EcoLogger(object):
     if self.idle_debug:
       self.row_fmt += "\t{:>10}\t{:>10.3f}"
     if self.co2_extra:
-      self.row_fmt += "\t{:>10}\t{:>8.3f}"
+      self.row_fmt += "\t{:>10}\t{:>8.3f}\t{:>10}"
     if self.cost_fields:
       self.row_fmt += "\t{:>8.3f}\t{:>8.3f}"
           
@@ -2392,7 +2426,7 @@ class EcoLogger(object):
     if self.idle_debug:
       headers += ["MaxSessions", "MaxLoad"] 
     if self.co2_extra:
-      headers += ["CI [g/kWh]", "Fossil [%]"]
+      headers += ["CI [g/kWh]", "Fossil [%]", "Index"]
     if self.cost_fields:
       headers += ["Price/kWh", "Cost"]
     self.log(self.fmt.format(self.header_fmt, *headers))
@@ -2412,7 +2446,7 @@ class EcoLogger(object):
     if self.idle_debug:
       cols += [stats["MaxSessions"], stats["MaxLoad"]]
     if self.co2_extra:
-      cols += [safe_round(co2_data[EcoProvider.FIELD_CO2]), co2_data[EcoProvider.FIELD_FOSSIL_PCT]]
+      cols += [safe_round(co2_data[EcoProvider.FIELD_CO2]), co2_data[EcoProvider.FIELD_FOSSIL_PCT], co2_data[EcoProvider.FIELD_INDEX]]
     if self.cost_fields:
       cols += [period_price, period_cost]
       

@@ -125,7 +125,7 @@ def cmd_provider(args):
     print("Old provider:", provider_str(prov))
 
     pstr = args.cmd_args[0] 
-    if pstr.startswith("co2:") or pstr.startswith("price:") or pstr.startswith("fossil_pct:"):
+    if pstr.startswith("co2:") or pstr.startswith("price:") or pstr.startswith("fossil_pct:") or pstr.startswith("index:"):
       metric, pstr = pstr.split(":", 1)
       prov["co2provider"]["provider"]['all'] = None
     else:

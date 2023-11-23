@@ -24,7 +24,7 @@ def set_governor(gov):
         policy["co2policy"][domain] = {}
 
     old_gov = policy["co2policy"][domain]["governor"]
-    if gov.startswith("co2:") or gov.startswith("price:") or gov.startswith("fossil_pct:"):
+    if gov.startswith("co2:") or gov.startswith("price:") or gov.startswith("fossil_pct:") or gov.startswith("index:"):
       old_gov = ":".join([policy["co2policy"][domain]["metric"], old_gov])
       metric, gov = gov.split(":", 1)
       policy["co2policy"][domain]["metric"] = metric
