@@ -18,7 +18,6 @@ import copy
 from math import ceil
 from inspect import isclass
 from _collections import deque
-from click.types import DateTime
 
 HOMEDIR = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = "/var/log/ecofreq.log"
