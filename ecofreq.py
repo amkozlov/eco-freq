@@ -1457,6 +1457,79 @@ class UKGridProvider(EcoProvider):
       data = None
     return data
 
+class StromGedachtProvider(EcoProvider):
+  LABEL="stromgedacht"
+  URL_BASE = "https://api.stromgedacht.de/v1/"
+  URL_POSTCODE = "?zip={0}"
+  URL_NOW = URL_BASE + "now" + URL_POSTCODE
+  URL_FORECAST = URL_BASE + "forecast" + URL_POSTCODE
+  STATE_MAP = {-1: "supergreen", 1: "green", 3: "orange", 4: "red"}
+  
+  def __init__(self, config, glob_interval):
+    EcoProvider.__init__(self, config, glob_interval)
+    self.set_config(config)
+    
+  def get_config(self):
+    cfg = super().get_config()
+    if self.postcode:
+      cfg["postcode"] = self.postcode
+    return cfg
+
+  def set_config(self, config):
+    self.postcode = config.get("postcode", 70173)
+    self.intstates = config.get("integerstates", False)
+    self.update_url()
+
+  def get_val_now(self, ts, arr):
+    last_val = None
+    last_ts = None
+    for e in arr:
+      t =  datetime.fromisoformat(e["dateTime"].replace('Z', '' ))
+      if last_ts and ts >= last_ts and  ts < t:
+        return last_val 
+      else:
+        last_ts = t
+        last_val = int(e["value"])
+    return None
+
+  def remap(self, jsnow, jsforecast):
+    data = {}
+    s = jsnow["state"]
+    data[EcoProvider.FIELD_INDEX] = s if self.intstates else self.STATE_MAP[s]
+      
+    ts = datetime.utcnow()
+    load = self.get_val_now(ts, jsforecast["load"])
+    renewableEnergy = self.get_val_now(ts, jsforecast["renewableEnergy"])
+    residualLoad = self.get_val_now(ts, jsforecast["residualLoad"])
+    superGreenThreshold = self.get_val_now(ts, jsforecast["superGreenThreshold"])
+      
+#    print(load, renewableEnergy, residualLoad, superGreenThreshold)
+    data[EcoProvider.FIELD_FOSSIL_PCT] = 100. * (residualLoad - superGreenThreshold) / load
+    return data
+
+  def update_url(self):
+    self.api_url_now = self.URL_NOW.format(self.postcode)
+    self.api_url_forecast = self.URL_FORECAST.format(self.postcode)
+
+  def fetch_json(self, url):
+    req = urllib.request.Request(url)
+    req.add_header("User-Agent", "Mozilla/5.0 (X11; U; Linux i686) Gecko/20071127 Firefox/2.0.0.11")
+    req.add_header("Accept", "application/json")
+
+    try:
+      resp = urllib.request.urlopen(req).read()
+      js = json.loads(resp)
+      return js
+    except:
+      e = sys.exc_info()
+      print ("Exception: ", e)
+      return None
+
+  def get_data(self):
+    jsnow = self.fetch_json(self.api_url_now)
+    jsforecast = self.fetch_json(self.api_url_forecast)
+    data = self.remap(jsnow, jsforecast)
+    return data 
 
 class TibberProvider(EcoProvider):
   LABEL="tibber"
@@ -1801,6 +1874,7 @@ class MockEcoProvider(EcoProvider):
 class EcoProviderManager(object):
   PROV_DICT = {"co2signal" : CO2Signal, 
                "ukgrid": UKGridProvider, 
+               "stromgedacht": StromGedachtProvider,
                "tibber": TibberProvider, 
                "octopus": OctopusProvider, 
                "awattar": AwattarProvider, 
@@ -1820,7 +1894,7 @@ class EcoProviderManager(object):
 
   def set_config(self, config):
     self.interval = int(config["provider"]["interval"])
-    for metric in ["all", EcoProvider.FIELD_CO2, EcoProvider.FIELD_PRICE]:
+    for metric in ["all", EcoProvider.FIELD_CO2, EcoProvider.FIELD_PRICE, EcoProvider.FIELD_INDEX, EcoProvider.FIELD_FOSSIL_PCT]:
       if metric in config["provider"]:
         p = config["provider"].get(metric)
         if p in [None, "", "none", "off"]:
@@ -1847,14 +1921,13 @@ class EcoProviderManager(object):
     return config
 
   def get_data(self):
+    data = {}
     if "all" in self.providers:
-      return self.providers["all"].get_data()
-    else:
-      data = {}
-      for metric in [EcoProvider.FIELD_CO2, EcoProvider.FIELD_PRICE]:
-        if metric in self.providers:
-          data[metric] = self.providers[metric].get_field(metric)
-      return data
+      data = self.providers["all"].get_data()
+    for metric in self.providers.keys():
+      if metric != "all":
+        data[metric] = self.providers[metric].get_field(metric)
+    return data
 
 class Governor(object):
   LABEL="None"
@@ -2017,7 +2090,7 @@ class StepGovernor(Governor):
   def co2val(self, co2):
     val = self.vmax
     for s, v in self.steps:
-      if (self.discrete and co2 == s) or (not self.discrete and float(co2) >= s):
+      if (self.discrete and str(co2) == s) or (not self.discrete and float(co2) >= s):
         val = v
         break 
     val = int(round(val, self.val_round))
@@ -2147,7 +2220,7 @@ class CPUPowerEcoPolicy(CPUEcoPolicy):
 
   def set_co2(self, co2):
     self.power = self.co2val(co2)
-#    print("Update policy co2 -> power: ", co2, "->", self.power)
+#  print("Update policy co2 -> power:", co2, "->", self.power)
     self.set_power(self.power)
 
   def reset(self):
@@ -2445,7 +2518,7 @@ class EcoLogger(object):
     if self.idle_debug:
       cols += [stats["MaxSessions"], stats["MaxLoad"]]
     if self.co2_extra:
-      cols += [safe_round(co2_data[EcoProvider.FIELD_CO2]), co2_data[EcoProvider.FIELD_FOSSIL_PCT], co2_data[EcoProvider.FIELD_INDEX]]
+      cols += [safe_round(co2_data.get(EcoProvider.FIELD_CO2)), co2_data.get(EcoProvider.FIELD_FOSSIL_PCT), co2_data.get(EcoProvider.FIELD_INDEX)]
     if self.cost_fields:
       cols += [period_price, period_cost]
       

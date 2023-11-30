@@ -92,7 +92,7 @@ def cmd_policy(args):
     if gov.startswith("frequency:") or gov.startswith("power:") or gov.startswith("cgroup:"):
       control, gov = gov.split(":", 1)
       policy["co2policy"][domain]["control"] = control
-    if gov.startswith("co2:") or gov.startswith("price:") or gov.startswith("fossil_pct:"):
+    if gov.startswith("co2:") or gov.startswith("price:") or gov.startswith("fossil_pct:") or gov.startswith("index:"):
       metric, gov = gov.split(":", 1)
       policy["co2policy"][domain]["metric"] = metric
     if gov in ["off", "disabled"]:
