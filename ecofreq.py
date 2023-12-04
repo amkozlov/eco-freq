@@ -2,6 +2,8 @@
 
 import sys, json 
 import urllib.request
+import requests
+from requests.auth import HTTPBasicAuth
 from subprocess import call,check_output,STDOUT,DEVNULL,CalledProcessError
 from datetime import datetime
 import time
@@ -1531,6 +1533,71 @@ class StromGedachtProvider(EcoProvider):
     data = self.remap(jsnow, jsforecast)
     return data 
 
+class WattTimeProvider(EcoProvider):
+  LABEL="watttime"
+  URL_BASE = "https://api2.watttime.org/"
+  URL_LOGIN = URL_BASE + "v2/login"
+  URL_INDEX = URL_BASE + "index"
+  LB_TO_KG = 0.45359237
+  
+  def __init__(self, config, glob_interval):
+    EcoProvider.__init__(self, config, glob_interval)
+    self.set_config(config)
+    
+  def get_config(self):
+    cfg = super().get_config()
+    if self.zone:
+      cfg["zone"] = self.zone
+    return cfg
+
+  def set_config(self, config):
+    self.username = config.get("username", None)
+    self.password = config.get("password", None)
+    self.zone = config.get("zone", "auto")
+    
+    if self.zone.lower().startswith("auto"):
+      self.coord_lat, self.coord_lon = GeoHelper.get_my_coords()
+      if not self.coord_lat or not self.coord_lon:
+         print ("ERROR: Failed to autodetect location!")
+         print ("Please make sure you have internet connetion, or specify country code in the config file.")
+         sys.exit(-1)
+    
+    self.update_url()
+
+  def login(self):
+    rsp = requests.get(self.URL_LOGIN, auth=HTTPBasicAuth(self.username, self.password))
+    self.token = rsp.json()['token']
+
+  def remap(self, jsdict):
+    data = {}
+    data[EcoProvider.FIELD_INDEX] = jsdict["percent"] 
+    if "moer" in jsdict:  
+      data[EcoProvider.FIELD_CO2] = float(jsdict["moer"]) * self.LB_TO_KG 
+      
+#    print(data)
+    return data
+
+  def update_url(self):
+    self.api_url = self.URL_INDEX
+
+  def get_data(self):
+    self.login()
+    headers = {'Authorization': 'Bearer {}'.format(self.token)}
+    if self.zone and self.zone != "auto":
+      params = {'ba': self.zone}
+    elif self.coord_lat and self.coord_lon:
+      params = {'latitude': self.coord_lat, 'longitude': self.coord_lon}
+
+    try:
+      rsp = requests.get(self.api_url, headers=headers, params=params)
+      data = self.remap(rsp.json())
+    except:
+      e = sys.exc_info()
+      print ("Exception: ", e)
+      data = None
+      
+    return data
+
 class TibberProvider(EcoProvider):
   LABEL="tibber"
   URL_BASE="https://api.tibber.com/v1-beta/gql"
@@ -1874,6 +1941,7 @@ class MockEcoProvider(EcoProvider):
 class EcoProviderManager(object):
   PROV_DICT = {"co2signal" : CO2Signal, 
                "ukgrid": UKGridProvider, 
+               "watttime": WattTimeProvider, 
                "stromgedacht": StromGedachtProvider,
                "tibber": TibberProvider, 
                "octopus": OctopusProvider, 
