@@ -1262,6 +1262,7 @@ class EcoProvider(object):
   FIELD_PRICE='price'
   FIELD_TAX='tax'
   FIELD_FOSSIL_PCT='fossil_pct'
+  FIELD_REN_PCT='renewable_pct'
   FIELD_INDEX='index'
   PRICE_UNITS= {"ct/kWh": 1.,
                 "eur/kWh": 100.,
@@ -1531,6 +1532,109 @@ class StromGedachtProvider(EcoProvider):
     jsnow = self.fetch_json(self.api_url_now)
     jsforecast = self.fetch_json(self.api_url_forecast)
     data = self.remap(jsnow, jsforecast)
+    return data 
+
+class EnergyChartsProvider(EcoProvider):
+  LABEL="energy-charts"
+  URL_BASE = "https://api.energy-charts.info/"
+  URL_COUNTRY = "?country={0}"
+  URL_PRICE_ZONE = "?bzn={}"
+  URL_POSTCODE = "&postal_code={}"
+  URL_PERIOD = "&start={}&end={}"
+  URL_SIGNAL = URL_BASE + "signal" + URL_COUNTRY
+  URL_PRICE = URL_BASE + "price" + URL_PRICE_ZONE
+  STATE_MAP = {-1: "black", 0: "red", 1: "yellow", 2: "green"}
+  
+  def __init__(self, config, glob_interval):
+    EcoProvider.__init__(self, config, glob_interval)
+    self.set_config(config)
+    
+  def get_config(self):
+    cfg = super().get_config()
+    cfg["country"] = self.country
+    cfg["integerstates"] = self.intstates
+    if self.postcode:
+      cfg["postcode"] = self.postcode
+    if self.pricezone:
+      cfg["pricezone"] = self.pricezone
+    return cfg
+
+  def set_config(self, config):
+    self.country = config.get("country", "de").lower()
+    self.postcode = config.get("postcode", None)
+    self.pricezone = config.get("pricezone", None)
+    self.intstates = config.get("integerstates", False)
+    self.update_url()
+
+  def get_val_now_idx(self, ts, arr):
+    idx = -1
+    last_ts = None
+    for t in arr:
+      if last_ts and ts >= last_ts and ts < t:
+        return idx 
+      else:
+        last_ts = t
+        idx += 1
+    return None
+
+  def remap(self, jssignal, jsprice):
+    data = {}
+    
+    ts = int(time.time())
+
+    if jssignal:
+      idx = self.get_val_now_idx(ts, jssignal["unix_seconds"])
+      s = int(jssignal["signal"][idx])
+      data[EcoProvider.FIELD_INDEX] = s if self.intstates else self.STATE_MAP[s]
+      data[EcoProvider.FIELD_REN_PCT] = jssignal["share"][idx] 
+      
+    if jsprice:
+      idx = self.get_val_now_idx(ts, jsprice["unix_seconds"])
+      p = float(jsprice["price"][idx])
+      if 'unit' in jsprice:
+        unit = jsprice['unit'].lower()
+        p *= EcoProvider.PRICE_UNITS.get(unit, 1)    
+      data[EcoProvider.FIELD_PRICE] = p   
+
+#    print(data)
+    return data
+
+  def update_url(self):
+    self.api_url_signal = self.URL_SIGNAL.format(self.country)
+    if self.postcode:
+      self.api_url_signal +=  self.URL_POSTCODE.format(self.postcode)
+    if self.pricezone:
+      self.api_url_price = self.URL_PRICE.format(self.pricezone.upper())
+    else:
+      self.api_url_price = None
+
+  def fetch_json(self, url):
+    req = urllib.request.Request(url)
+    req.add_header("User-Agent", "Mozilla/5.0 (X11; U; Linux i686) Gecko/20071127 Firefox/2.0.0.11")
+    req.add_header("Accept", "application/json")
+
+    try:
+      resp = urllib.request.urlopen(req).read()
+      js = json.loads(resp)
+      return js
+    except:
+      e = sys.exc_info()
+      print ("Exception: ", e)
+      return None
+
+  def get_data(self):
+    jssignal = self.fetch_json(self.api_url_signal)
+    if self.api_url_price:
+      ts = time.time()
+      tsdelta = 4*3600 
+      fmt = '%Y-%m-%dT%H:%M'
+      start = datetime.utcfromtimestamp(ts-tsdelta).strftime(fmt) 
+      end = datetime.utcfromtimestamp(ts+tsdelta).strftime(fmt) 
+      url = self.api_url_price + self.URL_PERIOD.format(start, end)
+      jsprice = self.fetch_json(url)
+    else:
+      jsprice = None
+    data = self.remap(jssignal, jsprice)
     return data 
 
 class WattTimeProvider(EcoProvider):
@@ -1943,6 +2047,7 @@ class EcoProviderManager(object):
                "ukgrid": UKGridProvider, 
                "watttime": WattTimeProvider, 
                "stromgedacht": StromGedachtProvider,
+               "energycharts": EnergyChartsProvider,
                "tibber": TibberProvider, 
                "octopus": OctopusProvider, 
                "awattar": AwattarProvider, 
