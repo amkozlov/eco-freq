@@ -7,9 +7,9 @@ Interval=600
 # Use EnergyChart electricity traffic light: https://api.energy-charts.info/ 
 all=energycharts
 # CO2 Option1: use CO2Signal for carbon accounting (API token required!)
-co2=co2signal
+#co2=co2signal
 # CO2 Option2: use constant carbon intensity (gCO2e/kwh) 
-#co2=const:350
+co2=const:350
 # Price Option1 (default): wholesale day-ahead market price by EnergyCharts
 # Price Option2: constant price in ct/kwh
 #price=const:30
@@ -49,7 +49,8 @@ Control=auto
 # No dynamic power scaling by default:
 #DefaultGovernor=maxperf
 # Sample powercap policy: black(grid congestion) or red(low RE) -> 50%, yellow(medium RE) -> 70%, green(high RE) -> 100%
-DefaultGovernor=index:list:black=0.5:red=0.5:yellow=0.7:green=max
+Metric=index
+DefaultGovernor=list:black=0.5:red=0.5:yellow=0.7:green=max
 Governor=default
 
 [monitor]
