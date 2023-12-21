@@ -1,0 +1,41 @@
+[general]
+#logco2extra=true
+
+[provider]
+# Query interval in seconds
+Interval=600
+# Use EnergyChart electricity traffic light: https://api.energy-charts.info/ 
+all=co2signal
+# Price Option1: constant price in ct/kwh
+price=const:30
+# Price Option2: dynamic price (e.g. tibber)
+#price=tibber
+
+[co2signal]
+#Please get your free API token here: https://co2signal.com/
+Token=YOUR_TOKEN
+#Please look up your grid zone here: https://www.electricitymap.org
+# Example: Chile
+Country=CL-SEN
+
+[tibber]
+Token=5K4MVS-OjfWhK_4yrjOlFe1F6kJXPVf7eQYggo8ebAE
+UseCache=True
+
+[octopus]
+Product=AGILE-18-02-21
+Tariff=E-1R-AGILE-18-02-21-C
+UseCache=F
+
+[policy]
+Control=auto
+# No dynamic power scaling by default:
+#DefaultGovernor=maxperf
+# Sample powercap policy: >100 g/kWh -> 70%, >300 g/kWh -> 50%
+Metric=co2
+DefaultGovernor=step:100=0.7:300=0.5
+Governor=default
+
+[monitor]
+PowerSensor=auto
+Interval=5
