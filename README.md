@@ -18,7 +18,7 @@ Prerequisites:
  - Linux system (tested with Ubuntu and CentOS)
  - Python3.7+
  - root privileges (for EcoFreq daemon)
- - [Free co2signal API token](https://co2signal.com/) (for realtime CO2 tracking) 
+ - (optional) API token -> [Which real-time CO2/price provider to use?](https://github.com/amkozlov/eco-freq/blob/main/config/README.md/) 
  - (optional) [`ipmitool`](https://github.com/ipmitool/ipmitool) to use IPMI power measurements
 
 Please run installer script which will create a config file and register `systemd` service for EcoFreq:
@@ -32,7 +32,7 @@ sudo ./install.sh
 * For a quick test of EcoFreq on your system without configuration overhead (using mock CO2 provider): 
 
 ```
-sudo ./ecofreq.py -c mock.cfg -l test.log
+sudo ./ecofreq.py -c config/mock.cfg -l test.log
 ```
 
 * After installing EcoFreq as a service, you can use standard `systemctl` commands to control it.  

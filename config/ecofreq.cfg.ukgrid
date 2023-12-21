@@ -1,0 +1,31 @@
+[general]
+logco2extra=true
+
+[provider]
+# Query interval in seconds
+Interval=300
+# Using UK National Grid API for real-time carbon intensity: https://carbonintensity.org.uk/ 
+all=ukgrid
+# Constant electricity price in p/kWh
+price=const:30
+# Optional: use dynamic pricing
+#price=octopus
+
+[ukgrid]
+PostCode=CB10
+#RegionID=10
+
+[octopus]
+Product=AGILE-18-02-21
+Tariff=E-1R-AGILE-18-02-21-C
+UseCache=F
+
+[policy]
+Control=auto
+#DefaultGovernor=maxperf
+DefaultGovernor=index:list:verylow=max:low=max:moderate=0.8:high=0.6:veryhigh=0.6
+Governor=default
+
+[monitor]
+PowerSensor=auto
+Interval=5
