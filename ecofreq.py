@@ -296,8 +296,8 @@ class NvidiaGPUHelper(object):
        return False
 
   @classmethod
-  def query_gpus(cls, fields, fmt = "csv,noheader,nounits"):
-    cmdline = cls.CMD_NVSMI + " --format=" + fmt +  " --query-gpu=" + fields 
+  def query_gpus(cls, fields, fmt = "csv,noheader,nounits", qcmd="--query-gpu"):
+    cmdline = cls.CMD_NVSMI + " --format=" + fmt +  " " + qcmd + "=" + fields 
     out = check_output(cmdline, shell=True, stderr=DEVNULL, universal_newlines=True)
     result = []
     for line in out.split("\n"):
@@ -322,6 +322,25 @@ class NvidiaGPUHelper(object):
   @classmethod
   def set_power_limit(cls, max_gpu_power):
     cmdline = cls.CMD_NVSMI + " -pl " + str(max_gpu_power)
+    out = check_output(cmdline, shell=True, stderr=DEVNULL, universal_newlines=True)
+
+  @classmethod
+  def get_supported_freqs(cls):
+   return cls.query_gpus(fields="graphics", qcmd="--query-supported-clocks")
+
+  @classmethod
+  def get_hw_max_freq(cls):
+    return [float(x[0]) for x in cls.query_gpus(fields = "clocks.max.gr")]
+
+  @classmethod
+  def set_freq_limit(cls, max_gpu_freq):
+    cmdline = cls.CMD_NVSMI + " -lgc 0," + str(int(max_gpu_freq))
+    cmdline += " --mode=1"
+    out = check_output(cmdline, shell=True, stderr=DEVNULL, universal_newlines=True)
+
+  @classmethod
+  def reset_freq_limit(cls):
+    cmdline = cls.CMD_NVSMI + " -rgc"
     out = check_output(cmdline, shell=True, stderr=DEVNULL, universal_newlines=True)
 
   @classmethod
@@ -443,8 +462,11 @@ class CpuFreqHelper(object):
 
   @classmethod
   def get_driver(cls):
-    return cls.get_string("scaling_driver").strip()
-
+    if cls.available():
+      return cls.get_string("scaling_driver").strip()
+    else:
+      return None
+       
   @classmethod
   def get_governor(cls):
     return cls.get_string("scaling_governor").strip()
@@ -2469,8 +2491,8 @@ class GPUEcoPolicy(EcoPolicy):
 
     if c == "power":
       return GPUPowerEcoPolicy(config)
-#    elif c == "frequency":
-#      return CPUFreqEcoPolicy(config)
+    elif c == "frequency":
+      return GPUFreqEcoPolicy(config)
     elif c == "cgroup":
       # cgroup currently does not support GPUs, so let's rely on CPU scaling 
       return None
@@ -2506,7 +2528,32 @@ class GPUPowerEcoPolicy(GPUEcoPolicy):
 
   def reset(self):
     self.set_power(self.pmax)
+
+class GPUFreqEcoPolicy(GPUEcoPolicy):
+  UNIT={"MHz": 1}
+  
+  def __init__(self, config):
+    GPUEcoPolicy.__init__(self, config)
     
+    if not NvidiaGPUHelper.available():
+      print ("ERROR: NVIDIA driver not found!")
+      sys.exit(-1)
+
+    self.fmax = NvidiaGPUHelper.get_hw_max_freq()[0]
+    self.fmin = self.fmax * 0.3
+    self.init_governor(config, self.fmin, self.fmax, 0)
+
+  def set_freq(self, freq):
+    if freq and not self.debug:
+      NvidiaGPUHelper.set_freq_limit(freq)    
+
+  def set_co2(self, co2):
+    self.freq = self.co2val(co2)
+    self.set_freq(self.freq)
+
+  def reset(self):
+    NvidiaGPUHelper.reset_freq_limit()
+
 class EcoPolicyManager(object):
   def __init__(self, config):
     self.policies = []
@@ -2917,7 +2964,7 @@ def read_config(args):
   return parser
 
 def diag():
-  print("EcoFreq v0.0.1 (c) 2023 Oleksiy Kozlov\n")
+  print("EcoFreq v0.0.1 (c) 2024 Oleksiy Kozlov\n")
   CpuInfoHelper.info()
   print("")
   LinuxPowercapHelper.info()
