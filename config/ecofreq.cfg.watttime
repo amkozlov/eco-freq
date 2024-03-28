@@ -8,13 +8,22 @@ Interval=600
 all=watttime
 # Price Option1: constant price in ct/kwh
 #price=const:30
-# Price Option3: dynamic price
-#price=???
+# Price Option2: Day-ahead location prices from gridstatus.io
+price=gridstatus.io
 
 [watttime]
 username=YOUR_USERNAME
 password=YOUR_PASSWORD
 #zone=CAISO_NORTH
+
+[gridstatus.io]
+# Get API token here: https://www.gridstatus.io/api
+Token=YOUR_TOKEN
+ISO=ercot
+Location=HB_NORTH
+# Available datasets: https://www.gridstatus.io/datasets
+#Dataset=ercot_spp_day_ahead_hourly
+#PriceField=spp
 
 [policy]
 Control=auto

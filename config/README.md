@@ -13,7 +13,7 @@ We recommend following region-specific APIs, and provide sample config files for
 ## Price (wholesale)
 
   - Continental Europe: [EnergyCharts](https://energy-charts.info/)
-  - US: [GridStatus.io](https://api.gridstatus.io/docs) -> not supported yet
+  - US: [GridStatus.io](https://api.gridstatus.io/docs) -> [ecofreq.cfg.watttime](https://github.com/amkozlov/eco-freq/blob/main/config/ecofreq.cfg.watttime)
 
 ## Price (retail)
 

@@ -1659,6 +1659,108 @@ class EnergyChartsProvider(EcoProvider):
     data = self.remap(jssignal, jsprice)
     return data 
 
+class GridStatusIOProvider(EcoProvider):
+  LABEL="gridstatus.io"
+  TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+  PRICE_UNIT = "eur/mwh"
+  URL_BASE = "https://api.gridstatus.io/v1/"
+  URL_QUERY = URL_BASE + "datasets/{}/query"
+  URL_ISO = "/iso/{}"
+  URL_LOCATION = "/location/{}"
+  URL_PERIOD = "?start_time={}"
+  URL_LATEST = URL_QUERY.format("isos_latest") + URL_ISO
+  URL_FORECAST = URL_QUERY + URL_LOCATION + URL_PERIOD
+  
+  def __init__(self, config, glob_interval):
+    EcoProvider.__init__(self, config, glob_interval)
+    self.set_config(config)
+    self.cached_data = None
+    
+  def get_config(self):
+    cfg = super().get_config()
+    cfg["token"] = self.token
+    cfg["iso"] = self.iso
+    cfg["pricefield"] = self.price_field
+    if self.location:
+      cfg["location"] = self.location
+    if self.dataset:
+      cfg["dataset"] = self.dataset
+    return cfg
+
+  def set_config(self, config):
+    self.token = config.get("token", None)
+    self.iso = config.get("iso", "caiso").lower()
+    self.location = config.get("location", None)
+    def_price = "spp" if self.iso == "ercot" else "lmp"
+    self.price_field = config.get("pricefield", def_price)
+    def_dataset = "{}_{}_day_ahead_hourly".format(self.iso, self.price_field)
+    self.dataset = config.get("dataset", def_dataset)
+    self.update_url()
+
+  def remap(self, jslatest, jsforecast):
+    data = {}
+    
+    ts = time.time()
+
+    if jslatest:
+      p = float(jslatest[0]["latest_lmp"])
+    elif jsforecast:
+      tsrec = None
+      for jsrec in jsforecast:
+        t1 = datetime.fromisoformat(jsrec["interval_start_utc"]).timestamp()
+        t2 = datetime.fromisoformat(jsrec["interval_end_utc"]).timestamp()
+        if ts >= t1 and  ts <= t2: 
+          tsrec = jsrec
+          break
+      if tsrec:  
+        p = float(tsrec[self.price_field])
+      else:
+        return None
+    else:
+      return None
+
+    p *= EcoProvider.PRICE_UNITS.get(self.PRICE_UNIT, 1)    
+    data[EcoProvider.FIELD_PRICE] = p   
+
+    return data
+
+  def update_url(self):
+    self.api_url_latest = self.URL_LATEST.format(self.iso)
+    if self.location:
+      self.api_url_forecast = self.URL_FORECAST.format(self.dataset, self.location, "{}")
+    else:
+      self.api_url_forecast = None
+
+  def fetch_json(self, url):
+    req = urllib.request.Request(url)
+    req.add_header("User-Agent", "Mozilla/5.0 (X11; U; Linux i686) Gecko/20071127 Firefox/2.0.0.11")
+    req.add_header("Accept", "application/json")
+    if self.token:
+      req.add_header("x-api-key", self.token)
+
+    try:
+      resp = urllib.request.urlopen(req).read()
+      js = json.loads(resp)
+      return js
+    except:
+      e = sys.exc_info()
+      print ("Exception: ", e)
+      return None
+
+  def get_data(self):
+    if self.api_url_forecast:
+      data = self.remap(None, self.cached_data)
+      if not data:
+        tnow = datetime.utcnow().replace(minute=0, second=0).strftime(self.TIME_FORMAT)
+        url = self.api_url_forecast.format(tnow)
+        jsforecast = self.fetch_json(url)
+        self.cached_data = jsforecast['data']
+        data = self.remap(None, self.cached_data)
+    else:      
+      jslatest = self.fetch_json(self.api_url_latest)
+      data = self.remap(jslatest['data'], None)
+    return data 
+
 class WattTimeProvider(EcoProvider):
   LABEL="watttime"
   URL_BASE = "https://api2.watttime.org/"
@@ -2070,6 +2172,7 @@ class EcoProviderManager(object):
                "watttime": WattTimeProvider, 
                "stromgedacht": StromGedachtProvider,
                "energycharts": EnergyChartsProvider,
+               "gridstatus.io": GridStatusIOProvider,
                "tibber": TibberProvider, 
                "octopus": OctopusProvider, 
                "awattar": AwattarProvider, 
