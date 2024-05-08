@@ -31,7 +31,7 @@ def cmd_info(args):
   print("State:                 ", info["idle_state"])
   if info["idle_state"] == "IDLE":
     print("Idle duration:         ", timedelta(seconds = int(info["idle_duration"])))
-  print("Load:                  ", info["idle_load"])
+  print("Load:                  ", info.get("idle_load", "NA"))
   print("Power [W]:             ", round(info["avg_power"]))
   print("CO2 intensity [g/kWh]: ", info["last_co2kwh"])     
   print("Energy price [ct/kWh]: ", safe_round(info["last_price"], 3))     

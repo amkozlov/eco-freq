@@ -152,9 +152,12 @@ class EcoFreqController(object):
   def info(self, res, args):
     res.update(self.ef.get_info())
     m_stats = self.ef.monitor.get_stats()
-    res['idle_state'] = m_stats["LastState"]
-    res['idle_load'] = m_stats["LastLoad"]
-    res['idle_duration'] = m_stats["IdleDuration"]
+    if "LastState" in m_stats:
+      res['idle_state'] = m_stats["LastState"]
+      res['idle_load'] = m_stats["LastLoad"]
+      res['idle_duration'] = m_stats["IdleDuration"]
+    else:
+      res['idle_state'] = "NA"
     res['avg_power'] = self.ef.monitor.get_last_avg_power()
     res['total_energy_j'] = self.ef.monitor.get_total_energy()
     res['total_co2'] = self.ef.total_co2
@@ -166,10 +169,14 @@ class EcoFreqController(object):
     res['co2policy'] = self.ef.co2policy.get_config()
 
   def set_policy(self, res, args):
-    old_cfg = dict(self.ef.config["policy"]) 
-#    print(old_cfg)
     new_cfg = {}
     for domain in args["co2policy"].keys():
+      dpol = domain + "_policy" 
+      if dpol in self.ef.config:
+        old_cfg = dict(self.ef.config[dpol])
+      else:
+        old_cfg = dict(self.ef.config["policy"])
+#    print(old_cfg)
       new_cfg[domain] = copy.deepcopy(old_cfg)
       new_cfg[domain].update(args["co2policy"][domain])
       # all domains use the same metric for now
@@ -807,6 +814,52 @@ class LinuxCgroupV1Helper(object):
   def enabled(cls, sub="cpu", grp=""):
     return os.path.isfile(cls.procs_file(sub, grp))
 
+class DockerHelper(object):
+  CMD_DOCKER = "docker"
+
+  @classmethod
+  def available(cls):
+     try:
+       out = cls.run_cmd(["-v"])
+       #TODO check version
+       return True
+     except CalledProcessError:
+       return False
+     
+  @classmethod
+  def run_cmd(cls, args, parse_output=True):
+    cmdline = cls.CMD_DOCKER + " " + " ".join(args) 
+#    print(cmdline)
+    out = check_output(cmdline, shell=True, stderr=DEVNULL, universal_newlines=True)
+    result = []
+    if parse_output:
+      for line in out.split("\n"):
+        if line:
+          if not line.startswith("Emulate Docker CLI"):
+            result.append([x.strip() for x in line.split(",")])
+    return result  
+
+  @classmethod
+  def get_container_ids(cls):
+    out = cls.run_cmd(["ps", "--format", "{{.ID}}"])
+    ids = [x[0] for x in out]
+    return ids 
+ 
+  @classmethod
+  def set_container_cpus(cls, ctrs, cpus):
+    if not ctrs:
+      ctrs = cls.get_container_ids()
+    for c in ctrs:
+      cls.run_cmd(["container", "update", "--cpus", str(cpus), c], False)
+
+  @classmethod
+  def set_pause(cls, ctrs, pause=True):
+    args = ["pause" if pause else "unpause"]
+    if not ctrs:
+      args += ["-a"]
+    else:  
+      args += ctrs
+    cls.run_cmd(args, False)
 
 class IPMIHelper(object):
   @classmethod
@@ -2325,7 +2378,7 @@ class ConstantGovernor(Governor):
     return {self.round_val(self.val) : None} 
 
   def co2val(self, co2):
-    return self.val
+    return round(self.val, self.val_round)
   
 class LinearGovernor(Governor):
   LABEL="linear"
@@ -2458,6 +2511,8 @@ class CPUEcoPolicy(EcoPolicy):
       return CPUFreqEcoPolicy(config)
     elif c == "cgroup":
       return CPUCgroupEcoPolicy(config)
+    elif c == "docker":
+      return CPUDockerEcoPolicy(config)
     elif c in OPTION_DISABLED:
       return None
     else:
@@ -2508,7 +2563,7 @@ class CPUPowerEcoPolicy(CPUEcoPolicy):
       sys.exit(-1)
 
     self.pmax = LinuxPowercapHelper.get_package_hw_max_power(0)
-    self.pmin = int(0.5*self.pmax)
+    self.pmin = int(0.1*self.pmax)
     self.pstart = LinuxPowercapHelper.get_package_power_limit(0)
     self.init_governor(config, self.pmin, self.pmax)
 
@@ -2565,6 +2620,45 @@ class CPUCgroupEcoPolicy(CPUEcoPolicy):
 
   def reset(self):
     self.set_quota(self.qmax)
+
+class CPUDockerEcoPolicy(CPUEcoPolicy):
+  UNIT={"c": 1}
+  UNLIMITED=0.0
+
+  def __init__(self, config):
+    EcoPolicy.__init__(self, config)
+    
+    if not DockerHelper.available():
+      print ("ERROR: Docker not found!")
+      sys.exit(-1)
+
+    self.ctrs = [] if "containers" not in config else config["containers"].split(",")
+    self.use_freeze = False if "cgroupfreeze" not in config else config["cgroupfreeze"]
+    num_cores = CpuInfoHelper.get_cores() if "maxcpus" not in config else float(config["maxcpus"])
+    self.qmax = num_cores
+    self.qmin = 0
+    self.qstart = self.UNLIMITED
+    self.init_governor(config, self.qmin, self.qmax)
+
+  def set_quota(self, cpu_quota):
+    if self.debug:
+      return
+    if self.use_freeze:
+      if cpu_quota == self.qmin:
+        DockerHelper.set_pause(self.ctrs, True)
+        return
+      else:
+        DockerHelper.set_pause(self.ctrs, False)
+    if cpu_quota:
+      DockerHelper.set_container_cpus(self.ctrs, cpu_quota)
+
+  def set_co2(self, co2):
+    self.quota = self.co2val(co2)
+#    print("Update policy co2 -> power: ", co2, "->", self.power)
+    self.set_quota(self.quota)
+
+  def reset(self):
+    self.set_quota(self.qstart)
 
 class GPUEcoPolicy(EcoPolicy):
   def __init__(self, config):
@@ -2660,7 +2754,13 @@ class GPUFreqEcoPolicy(GPUEcoPolicy):
 class EcoPolicyManager(object):
   def __init__(self, config):
     self.policies = []
-    cfg_dict = dict(config.items("policy")) if "policy" in config else None
+    cfg_dict = {"cpu": None, "gpu": None}
+    if "policy" in config:
+      cfg_dict["gpu"] = cfg_dict["cpu"] = dict(config.items("policy"))  
+    if "cpu_policy" in config:
+      cfg_dict["cpu"] = dict(config.items("cpu_policy"))
+    if "gpu_policy" in config:
+      cfg_dict["gpu"] = dict(config.items("gpu_policy"))
     self.set_config(cfg_dict)
     
   def info_string(self):
