@@ -4,12 +4,20 @@
 [provider]
 # Query interval in seconds
 Interval=600
-# Use EnergyChart electricity traffic light: https://api.energy-charts.info/ 
-all=co2signal
+# CO2 Option 1: Use ElectricityMaps v3 API 
+all=electricitymaps
+# CO2 Option 2: Use legacy CO2Signal API (requires token) 
+#all=co2signal
 # Price Option1: constant price in ct/kwh
 price=const:30
 # Price Option2: dynamic price (e.g. tibber)
 #price=tibber
+
+[electricitymaps]
+Zone=CL-SEN
+#Token=
+DisableEstimations=False
+EmissionFactorType=lifecycle
 
 [co2signal]
 #Please get your free API token here: https://co2signal.com/

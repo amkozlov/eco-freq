@@ -1467,6 +1467,93 @@ class CO2Signal(EcoProvider):
       data = None
     return data
 
+class ElectricityMapsProvider(EcoProvider):
+  LABEL="electricity-maps"
+  URL_BASE = "https://api.electricitymap.org/v3/"
+  URL_CO2_PARAMS = "?disableEstimations={}&emissionFactorType={}"
+  URL_MIX_PARAMS = "?disableEstimations={}"
+  URL_CO2 = URL_BASE + "carbon-intensity/"
+  URL_CO2_NOW = URL_CO2 + "latest" + URL_CO2_PARAMS
+  URL_MIX = URL_BASE + "power-breakdown/"
+  URL_MIX_NOW = URL_MIX + "latest" + URL_MIX_PARAMS
+  URL_ZONE = "&zone={}"
+  URL_COORD = "&lat={0}&lon={1}"
+  FIELD_MAP = {EcoProvider.FIELD_CO2: "carbonIntensity", 
+               EcoProvider.FIELD_REN_PCT: 'renewablePercentage',
+               EcoProvider.FIELD_FOSSIL_PCT: "fossilFuelPercentage"}
+  
+  def __init__(self, config, glob_interval):
+    EcoProvider.__init__(self, config, glob_interval)
+    self.set_config(config)
+    
+  def get_config(self):
+    cfg = super().get_config()
+    cfg["zone"] = self.zone
+    cfg["disableestimations"] = self.noestimates
+    cfg["emissionfactortype"] = self.eftype
+    if self.token:
+      cfg["token"] = self.token
+    return cfg
+
+  def set_config(self, config):
+    self.zone = config.get("zone", "auto")
+    self.token = config.get("token", None)
+    self.noestimates = config.get("disableestimations", False)
+    self.eftype = config.get("emissionfactortype", "lifecycle")
+
+    if self.zone.lower().startswith("auto"):
+      self.coord_lat, self.coord_lon = GeoHelper.get_my_coords()
+      if not self.coord_lat or not self.coord_lon:
+         print ("ERROR: Failed to autodetect location!")
+         print ("Please make sure you have internet connetion, or specify country code in the config file.")
+         sys.exit(-1)
+      
+    self.update_url()
+
+  def remap(self, jsco2, jsmix):
+    data = {}
+    for k, v in self.FIELD_MAP.items():
+      if v in jsco2:
+        data[k] = jsco2[v]
+      elif v in jsmix:
+        data[k] = jsmix[v]
+        
+    data[EcoProvider.FIELD_FOSSIL_PCT] = 100 - jsmix["fossilFreePercentage"]      
+        
+    return data
+
+  def url_zone(self):
+    if not self.zone.lower().startswith("auto"):
+      return self.URL_ZONE.format(self.zone)
+    else:
+      return self.URL_COORD.format(self.coord_lat, self.coord_lon)
+
+  def update_url(self):
+    zone_param = self.url_zone()
+    self.api_url_co2 = self.URL_CO2_NOW.format(self.noestimates, self.eftype) + zone_param
+    self.api_url_mix = self.URL_MIX_NOW.format(self.noestimates) + zone_param
+
+  def fetch_json(self, url):
+    req = urllib.request.Request(url)
+    req.add_header("User-Agent", "Mozilla/5.0 (X11; U; Linux i686) Gecko/20071127 Firefox/2.0.0.11")
+    if self.token:
+      req.add_header("auth-token", self.token)
+
+    try:
+      resp = urllib.request.urlopen(req).read()
+      js = json.loads(resp)
+      return js
+    except:
+      e = sys.exc_info()[0]
+      print ("Exception: ", e)
+      return None
+
+  def get_data(self):
+    jsco2 = self.fetch_json(self.api_url_co2)
+    jsmix = self.fetch_json(self.api_url_mix)
+    data = self.remap(jsco2, jsmix)
+    return data 
+
 class UKGridProvider(EcoProvider):
   LABEL="ukgrid"
   URL_BASE = " https://api.carbonintensity.org.uk/"
@@ -2221,6 +2308,7 @@ class MockEcoProvider(EcoProvider):
   
 class EcoProviderManager(object):
   PROV_DICT = {"co2signal" : CO2Signal, 
+               "electricitymaps" : ElectricityMapsProvider,
                "ukgrid": UKGridProvider, 
                "watttime": WattTimeProvider, 
                "stromgedacht": StromGedachtProvider,
@@ -2761,6 +2849,7 @@ class EcoPolicyManager(object):
       cfg_dict["cpu"] = dict(config.items("cpu_policy"))
     if "gpu_policy" in config:
       cfg_dict["gpu"] = dict(config.items("gpu_policy"))
+    cfg_dict["metric"] = cfg_dict["cpu"].get("metric", "co2")  
     self.set_config(cfg_dict)
     
   def info_string(self):
