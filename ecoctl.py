@@ -74,6 +74,8 @@ def provider_str(prov):
       param1 = "CO2Range = " + str(d["mock"]["co2range"])
       param2 = "CO2File = " + str(d["mock"]["co2file"])
       provstr = "{0} (interval = {1} s, {2}, {3})".format(prov_type, interval, param1, param2)
+    else:
+      provstr = "{0} (interval = {1} s)".format(prov_type, interval)
     provlist.append(m + " = " + provstr)
   return ", ".join(provlist)
   
@@ -146,7 +148,7 @@ def cmd_provider(args):
       wildcard_set(p["mock"], "co2file", prov_params, 3)
     elif prov_type == "const":
       wildcard_set(p["const"], metric, prov_params, 2)
-#    print(prov)
+#   print(prov)
     ret = ec.set_provider(prov)
   
     prov = ec.get_provider()

@@ -1470,7 +1470,7 @@ class CO2Signal(EcoProvider):
     return data
 
 class ElectricityMapsProvider(EcoProvider):
-  LABEL="electricity-maps"
+  LABEL="electricitymaps"
   URL_BASE = "https://api.electricitymap.org/v3/"
   URL_CO2_PARAMS = "?disableEstimations={}&emissionFactorType={}"
   URL_MIX_PARAMS = "?disableEstimations={}"
@@ -1699,7 +1699,7 @@ class StromGedachtProvider(EcoProvider):
     return data 
 
 class EnergyChartsProvider(EcoProvider):
-  LABEL="energy-charts"
+  LABEL="energycharts"
   URL_BASE = "https://api.energy-charts.info/"
   URL_COUNTRY = "?country={0}"
   URL_PRICE_ZONE = "?bzn={}"
