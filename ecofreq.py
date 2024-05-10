@@ -3217,10 +3217,11 @@ class EcoFreq(object):
 def parse_args():
   parser = argparse.ArgumentParser()
   parser.add_argument("-c", dest="cfg_file", default=None, help="Config file name.")
-  parser.add_argument("-d", dest="diag", action="store_true", help="Show system info.")
+  parser.add_argument("-d", dest="diag", action="store_true", help="Show system info and exit.")
   parser.add_argument("-g", dest="governor", default=None, help="Power governor (off = no power scaling).")
   parser.add_argument("-l", dest="log_fname", default=None, help="Log file name.")
   parser.add_argument("-t", dest="co2token", default=None, help="CO2Signal token.")
+  parser.add_argument("-i", dest="interval", default=None, help="Provider polling interval in seconds.")
   args = parser.parse_args()
   return args
 
@@ -3254,6 +3255,8 @@ def read_config(args):
        parser["general"]["LogFile"] = args.log_fname
      if args.governor:
        parser["policy"]["Governor"] = args.governor
+     if args.interval:
+       parser["provider"]["interval"] = args.interval
 
   return parser
 
@@ -3274,9 +3277,9 @@ def diag():
   
 if __name__ == '__main__':
 
-  try:
-    args = parse_args()
+  args = parse_args()
 
+  try:
     diag()
 
     if not args.diag:

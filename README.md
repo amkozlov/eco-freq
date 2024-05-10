@@ -48,7 +48,6 @@ sudo ./ecofreq.py -c config/mock.cfg -l test.log
 sudo systemctl start ecofreq
 sudo systemctl status ecofreq
 sudo systemctl stop ecofreq
-
 ```
 
 Command-line tool `ecoctl` allows to query and control the EcoFreq service. 
@@ -74,11 +73,14 @@ or [configure socket permissions accordingly](https://github.com/amkozlov/eco-fr
 * Report energy and CO2 for a program run (assuming it runs exclusively -> to be improved): 
 
 ```
-./ecorun.py sleep 5
+./ecorun.py sleep 10
 
-energy_j:   343.003
+time_s:     10.003
+pwr_avg_w:  88.724
+energy_j:   887.5
 energy_kwh: 0.0
-co2_g:      0.003
+co2_g:      0.098
+cost_ct:    0.001
 ```
 
 * Report energy and CO2 statistics for a local EcoFreq instance (default log file):
@@ -90,14 +92,20 @@ EcoStat v0.0.1
 
 Loading data from log file: /var/log/ecofreq.log
 
-Time interval:               2021-05-18 04:02:59 - 2021-05-23 01:44:38
-Duration active:             4 days, 4:35:21
-Duration inactive:           17:06:18
-CO2 intensity range [g/kWh]: 108 - 387
-CO2 intensity mean [g/kWh]:  245
-Energy consumed [J]:         134568612.5
-Energy consumed [kWh]:       37.38
-CO2 emitted [kg]:            9.23712
+Time interval:               2022-01-01 00:03:30 - 2022-06-30 23:53:23
+Monitoring active:           175 days, 20:24:55
+Monitoring inactive:         0:16:44
+CO2 intensity range [g/kWh]: 109 - 545
+CO2 intensity mean [g/kWh]:  341
+Energy consumed [J]:         4358414437.5
+Energy consumed [kWh]:       1210.671
+= electric car travel [km]:  6053
+Total CO2 emitted [kg]:      409.507177
+
+Idle time:                   41 days, 9:43:30
+Idle energy [kWh]:           127.437
+Idle = e-car travel [km]:    637
+Idle CO2 [kg]:               44.531762
 ```
 
 For more examples, see [USAGE.md](https://github.com/amkozlov/eco-freq/blob/main/doc/USAGE.md/)
