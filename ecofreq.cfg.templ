@@ -1,41 +1,56 @@
 [general]
+#LogCO2extra=true
 #LogCost=true
 
 [provider]
-co2=co2signal
+all=electricitymaps
 # fixed energy price: 30 ct/kWh
 price=const:30
-# Variable price with Tibber, please add API token below
 #price=tibber
 Interval=600
 
-[co2signal]
-#Please get your free API token here: https://co2signal.com/
-Token=<CO2TOKEN>
-#Please look up your grid zone here: https://www.electricitymap.org
+[electricitymaps]
+Zone=<CO2COUNTRY>
+#Token=
+DisableEstimations=False
+EmissionFactorType=lifecycle
+
+[energycharts]
+#List of available countries/price zones: https://api.energy-charts.info/#/
 Country=<CO2COUNTRY>
+PostCode=<POSTCODE>
+PriceZone=<CO2COUNTRY>
 
 [ukgrid]
-#PostCode=CB10
+PostCode=<POSTCODE>
 #RegionID=10
 
 [stromgedacht]
-PostCode=69118
+PostCode=<POSTCODE>
 #IntegerStates=True
 
 [watttime]
 username=myuser
 password=mypwd
-#zone=CAISO_NORTH
+zone=<CO2COUNTRY>
 
 [tibber]
 Token=TIBBER_TOKEN
 #UseCache=True
 
+[gridstatus.io]
+# Get API token here: https://www.gridstatus.io/api
+Token=YOUR_TOKEN
+ISO=ercot
+Location=HB_NORTH
+# Available datasets: https://www.gridstatus.io/datasets
+#Dataset=ercot_spp_day_ahead_hourly
+#PriceField=spp
+
 [policy]
 Control=auto
 Metric=co2
-DefaultGovernor=Linear:150:500
+DefaultGovernor=step:200=0.8:400=0.6
 Governor=<CO2POLICY>
 
 [monitor]

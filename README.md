@@ -7,7 +7,7 @@
 
 In many regions with a high share of renewables - such as Germany, Spain, UK or California - CO2 emissions per kWh of electricity may vary two-fold within a single day, and up to four-fold within a year. This is due to both, variable production from solar and wind, and variable demand (peak hours vs. night-time/weekends). Hence, reducing energy consumption during these periods of high carbon intesity leads to overproportionate CO2 savings. This is exactly the idea behind EcoFreq: it modulates CPU/GPU power consumption *in realtime* according to the current "greenness" of the grid energy mix. Importantly, this modulation is absolutely transparent to user applications: they will run as usual without interruption, "accelerating" in times when energy comes mostly from renewables, and being throttled when fossil generation increases. 
 
-And it gets even better if you have a [time-of-use electricity tarrif](https://www.irena.org/-/media/Files/IRENA/Agency/Publication/2019/Feb/IRENA_Innovation_ToU_tariffs_2019.pdf?la=en&hash=36658ADA8AA98677888DB2C184D1EE6A048C7470) or onsite solar generation: (being an) EcoFreq can save you a few cents ;)
+And it gets even better if you have a dynamic electricity tariff ([example1](https://octopus.energy/smart/agile/), [example2](https://tibber.com/en)) or solar panels: (being an) EcoFreq can save you a few cents ;)
 
 TL;DR Just look at those awesome plots from [electricitymap.org](https://www.electricitymap.org) and you'll get the idea: 
 ![](https://github.com/amkozlov/eco-freq/blob/main/img/emap_all.png?raw=true)
@@ -16,16 +16,23 @@ TL;DR Just look at those awesome plots from [electricitymap.org](https://www.ele
 
 Prerequisites:
  - Linux system (tested with Ubuntu and CentOS)
- - Python3.7+
- - root privileges (for EcoFreq daemon)
+ - Python3.7+ with `pip`
  - (optional) API token -> [Which real-time CO2/price provider to use?](https://github.com/amkozlov/eco-freq/blob/main/config/README.md/) 
  - (optional) [`ipmitool`](https://github.com/ipmitool/ipmitool) to use IPMI power measurements
 
-Please run installer script which will create a config file and register `systemd` service for EcoFreq:
+
+Please run installer script which will register `systemd` service and create a basic config file for EcoFreq:
 
 ```
 sudo ./install.sh
 ```
+
+Alternatively, you can specify a custom config file (see [examples](https://github.com/amkozlov/eco-freq/blob/main/config)):
+
+```
+sudo ./install.sh my.ecofreq.cfg
+```
+
 
 ## Usage
 
@@ -37,17 +44,31 @@ sudo ./ecofreq.py -c config/mock.cfg -l test.log
 
 * After installing EcoFreq as a service, you can use standard `systemctl` commands to control it.  
 
-Start:
 ```
 sudo systemctl start ecofreq
-```
-Stop:
-```
-sudo systemctl stop ecofreq
-```
-Show status:
-```
 sudo systemctl status ecofreq
+sudo systemctl stop ecofreq
+
+```
+
+Command-line tool `ecoctl` allows to query and control the EcoFreq service. 
+If you want to run `ecoctl` without `sudo` (recommended), either add your user to the `ecofreq` group,
+or [configure socket permissions accordingly](https://github.com/amkozlov/eco-freq/blob/main/doc/CONFIG.md#Server). 
+
+* Show EcoFreq status:
+
+```
+./ecoctl.py
+```
+
+* Change power scaling policy:
+
+```
+./ecoctl.py policy co2:step:100=0.7:200=0.5
+
+./ecoctl.py policy const:50%
+
+./ecoctl.py policy maxperf
 ```
 
 * Report energy and CO2 for a program run (assuming it runs exclusively -> to be improved): 
@@ -79,18 +100,8 @@ Energy consumed [kWh]:       37.38
 CO2 emitted [kg]:            9.23712
 ```
 
-Use non-default log file (e.g., from a remote server):
-
-```
-./ecostat.py -l myserver.log
-```
-
-For a given time interval:
-
-```
-./ecostat.py --start 2021-05-18 --end 2021-05-20
-``` 
+For more examples, see [USAGE.md](https://github.com/amkozlov/eco-freq/blob/main/doc/USAGE.md/)
 
 ## Configuration
 
-TODO
+See [CONFIG.md](https://github.com/amkozlov/eco-freq/blob/main/doc/CONFIG.md/)
