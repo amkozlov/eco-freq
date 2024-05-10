@@ -201,33 +201,35 @@ class EcoFreqController(object):
       print(sys.exc_info())
 
 class EcoServer(object):
-  IPC_PATH="/tmp/ecofreq-ipc"
+  IPC_FILE="/var/run/ecofreq.sock"
+  BUF_SIZE=2048
 
   def __init__(self, iface, config=None):
     import grp
     self.iface = iface
-    self.fmod = 0o666
+    self.fmod = 0o660
     gname = "ecofreq"
     if config and "server" in config:
       gname = config["server"].get("filegroup", gname)
-      self.fmod = 0o660
+      if "filemode" in config["server"]:
+        self.fmod = int(config["server"]["filemode"], 8)
     try:
       self.gid = grp.getgrnam(gname).gr_gid
     except KeyError:
       self.gid = -1
   
   async def spin(self):
-    self.serv = await asyncio.start_unix_server(self.on_connect, path=self.IPC_PATH)
+    self.serv = await asyncio.start_unix_server(self.on_connect, path=self.IPC_FILE)
     if self.gid >= 0:
-      os.chown(self.IPC_PATH, -1, self.gid)
-    os.chmod(self.IPC_PATH, self.fmod)
+      os.chown(self.IPC_FILE, -1, self.gid)
+    os.chmod(self.IPC_FILE, self.fmod)
     
 #    print(f"Server init")    
 #    async with self.serv:
     await self.serv.serve_forever()    
     
   async def on_connect(self, reader, writer):
-    data = await reader.read(1024)
+    data = await reader.read(self.BUF_SIZE)
     msg = data.decode()
     # addr = writer.get_extra_info('peername')
     
@@ -250,7 +252,7 @@ class EcoClient(object):
     
   async def unix_send(self, message):
       try:
-        reader, writer = await asyncio.open_unix_connection(EcoServer.IPC_PATH)
+        reader, writer = await asyncio.open_unix_connection(EcoServer.IPC_FILE)
       except FileNotFoundError:
         raise ConnectionRefusedError
   
@@ -258,7 +260,7 @@ class EcoClient(object):
       writer.write(message.encode())
       await writer.drain()
   
-      data = await reader.read(1024)
+      data = await reader.read(EcoServer.BUF_SIZE)
       # print(f'Received: {data.decode()!r}')
   
       writer.close()
