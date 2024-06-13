@@ -113,3 +113,9 @@ For more examples, see [USAGE.md](https://github.com/amkozlov/eco-freq/blob/main
 ## Configuration
 
 See [CONFIG.md](https://github.com/amkozlov/eco-freq/blob/main/doc/CONFIG.md/)
+
+## Citation
+
+Oleksiy Kozlov, Alexandros Stamatakis. **EcoFreq: Compute with Cheaper, Cleaner Energy via Carbon-Aware Power Scaling**, *ISC-2024*.
+
+Open access: https://ieeexplore.ieee.org/document/10528928
