@@ -4,6 +4,7 @@ import sys, json
 import urllib.request
 import requests
 from requests.auth import HTTPBasicAuth
+from aiomqtt import Client, MqttError
 from subprocess import call,check_output,STDOUT,DEVNULL,CalledProcessError
 from datetime import datetime
 import time
@@ -889,6 +890,91 @@ class IPMIHelper(object):
     except CalledProcessError:
       return None
 
+class MQTTClient(object):
+  recv_queue: asyncio.Queue
+  send_queue: asyncio.Queue
+  
+  def __init__(self, config):
+    self.hostname = config.get("host", "localhost")
+    self.port = None
+    self.username = None
+    self.password = None
+    self.sub_topic = config.get("topic", None)
+    self.pub_topic = config.get("pubtopic", None)
+    self.pub_fields = config.get("pubfields", None)
+    if self.pub_fields:
+      self.pub_fields = self.pub_fields.split(",")
+        
+  async def run(self):
+    self.recv_queue = asyncio.Queue()
+    self.send_queue = asyncio.Queue()
+    while True:
+      print('Connecting to MQTT broker...')
+      try:
+          async with Client(
+              hostname=self.hostname,
+#                    port=self.port,
+              username=self.username,
+              password=self.password
+          ) as client:
+              print('Connected to MQTT broker')
+
+              # Handle pub/sub
+              await asyncio.gather(
+                  self.handle_sub(client),
+                  self.handle_pub(client)
+              )
+      except MqttError:
+          print('MQTT error:')
+          await asyncio.sleep(5)  
+
+  async def handle_sub(self, client):
+    if not self.sub_topic:
+      return
+    await client.subscribe(self.sub_topic)
+    async for message in client.messages:
+      self.recv_queue.put_nowait(message.payload)
+    
+  async def handle_pub(self, client):
+    if not self.pub_topic:
+      return
+    while True:
+      data = await self.send_queue.get()
+      payload = json.dumps(data)
+#      print(payload)
+      await client.publish(self.pub_topic, payload=payload.encode())
+      self.send_queue.task_done()
+
+  def get_msg(self):
+    try:
+      return self.recv_queue.get_nowait()
+    except (asyncio.queues.QueueEmpty, AttributeError):
+      return None
+
+  def put_msg(self, data):
+    if self.pub_fields:
+      data = {key: data[key] for key in self.pub_fields} 
+    self.send_queue.put_nowait(data)
+    
+class MQTTManager(object):
+  CLMAP = {}
+
+  @classmethod
+  def add_client(cls, label, config):
+    client = MQTTClient(config)
+    cls.CLMAP[label] = client
+    return client
+  
+  @classmethod
+  def get_client(cls, label):
+    return cls.CLMAP[label]
+
+  @classmethod
+  async def run(cls):
+    tasks = [asyncio.create_task(c.run()) for c in cls.CLMAP.values()]
+    for t in tasks:
+      await t
+                
 class MonitorManager(object):
   def __init__(self, config):
     self.monitors = EnergyMonitor.from_config(config)
@@ -1148,6 +1234,8 @@ class EnergyMonitor(Monitor):
           monitors.append(AMDMsrEnergyMonitor(config))
         if NvidiaGPUHelper.available():
           monitors.append(GPUEnergyMonitor(config))
+    elif p == "mqtt":
+      monitors.append(MQTTEnergyMonitor(config))
     else:
       for s in p.split(","):
         if s in sens_dict:
@@ -1333,14 +1421,40 @@ class IPMIEnergyMonitor(EnergyMonitor):
     self.last_pwr = cur_pwr
     return energy_diff
 
+class MQTTEnergyMonitor(EnergyMonitor):
+  def __init__(self, config):
+    EnergyMonitor.__init__(self, config)
+    self.last_pwr = 0
+    self.label = "mqtt_power"
+    mqtt_cfg = config[self.label]
+    self.interval = int(mqtt_cfg.get("interval", self.interval))    
+    self.mqtt_client = MQTTManager.add_client(self.label, mqtt_cfg)
+
+  @classmethod
+  def available(cls):
+    return True
+
+  def sample_energy(self):
+    cur_pwr = self.mqtt_client.get_msg()
+    if not cur_pwr:
+      print ("WARNING: MQTT power reading failed!")
+      cur_pwr = self.last_pwr
+    else:
+      cur_pwr = float(cur_pwr)
+    avg_pwr = 0.5 * (self.last_pwr + cur_pwr)
+    energy_diff = avg_pwr * self.interval
+    self.last_pwr = cur_pwr
+    return energy_diff
+
 class EcoProvider(object):
   LABEL=None
   FIELD_CO2='co2'
   FIELD_PRICE='price'
   FIELD_TAX='tax'
   FIELD_FOSSIL_PCT='fossil_pct'
-  FIELD_REN_PCT='renewable_pct'
+  FIELD_REN_PCT='ren_pct'
   FIELD_INDEX='index'
+  FIELD_DEFAULT='_default'
   PRICE_UNITS= {"ct/kWh": 1.,
                 "eur/kWh": 100.,
                 "eur/mwh": 0.1,
@@ -1362,6 +1476,8 @@ class EcoProvider(object):
     if not data:
       data = self.get_data()
     try:
+      if not field in data:
+        field =self.FIELD_DEFAULT
       return float(data[field])
     except:   
       return None
@@ -2196,7 +2312,33 @@ class AwattarProvider(EcoProvider):
         data = self.remap(self.cached_data)
       return data
     
-  
+class MQTTEcoProvider(EcoProvider):
+  LABEL="mqtt"
+
+  def __init__(self, config, glob_interval, label):
+    EcoProvider.__init__(self, config, glob_interval)
+    self.label = label
+    self.set_config(config)
+    self.mqtt_client = MQTTManager.add_client(self.label, config)
+
+  def set_config(self, config):
+    self.topic = config.get("topic", None)
+
+  def get_config(self):
+    cfg = super().get_config()
+    cfg["topic"] = self.topic
+    cfg["label"] = self.label
+    return cfg
+
+  def get_data(self):
+    data = {}
+    val = self.mqtt_client.get_msg()
+#    print(val)
+    data[self.FIELD_DEFAULT] = float(val) if val is not None else None
+#    print(data)
+    return data
+    
+      
 class MockEcoProvider(EcoProvider):
   LABEL="mock"
   
@@ -2319,6 +2461,7 @@ class EcoProviderManager(object):
                "tibber": TibberProvider, 
                "octopus": OctopusProvider, 
                "awattar": AwattarProvider, 
+               "mqtt": MQTTEcoProvider,
                "mock" : MockEcoProvider, 
                "const": ConstantProvider }
 
@@ -2343,6 +2486,9 @@ class EcoProviderManager(object):
         elif p.startswith("const:"):
           cfg = { metric: p.strip("const:") }
           self.providers[metric] = ConstantProvider(cfg, self.interval)
+        elif p.startswith("mqtt"):
+          cfg = config[p]
+          self.providers[metric] = MQTTEcoProvider(cfg, self.interval, p)
         elif p in self.PROV_DICT:
           try:
             cfg = config[p]
@@ -2902,6 +3048,8 @@ class EcoPolicyManager(object):
       field = EcoProvider.FIELD_PRICE
     elif self.metric == "fossil_pct":
       field = EcoProvider.FIELD_FOSSIL_PCT
+    elif self.metric == "ren_pct":
+      field = EcoProvider.FIELD_REN_PCT
     elif self.metric == "index":
       field = EcoProvider.FIELD_INDEX
     else:
@@ -2971,6 +3119,17 @@ class CO2History(object):
   def max_co2(self, quantile = 5):
     n = int(0.01 * quantile * len(self.h)) + 1
     return heapq.nlargest(n, self.h)[n-1]
+
+class MQTTLogger(object):
+  def __init__(self, config, iface):
+    self.iface = iface
+    self.label = "mqtt_logger"
+    cfg = config[self.label]
+    self.mqtt_client = MQTTManager.add_client(self.label, cfg)
+    
+  def log(self):
+    data = self.iface.run_cmd("info")
+    self.mqtt_client.put_msg(data)
 
 class EcoLogger(object):
   def __init__(self, config):
@@ -3050,6 +3209,7 @@ class EcoLogger(object):
 class EcoFreq(object):
   def __init__(self, config):
     self.config = config
+
     self.co2provider = EcoProviderManager(config)
     self.co2policy = EcoPolicyManager(config)
     self.co2history = CO2History(config)
@@ -3064,13 +3224,20 @@ class EcoFreq(object):
 
     self.iface = EcoFreqController(self)
     self.server = EcoServer(self.iface, config)
-      
+    
+    mqtt_log = config["general"].get("logmqtt", False)
+    if mqtt_log:
+      self.mqtt_logger = MQTTLogger(config, self.iface)
+    else:
+      self.mqtt_logger = None
+    
     # make sure that CO2 sampling interval is a multiple of energy sampling interval
     self.sample_interval = self.monitor.adjust_interval(self.co2provider.interval)
     # print("sampling intervals co2/energy:", self.co2provider.interval, self.sample_interval)
     self.last_co2_data = self.co2provider.get_data()
     self.last_co2kwh = self.last_co2_data.get(EcoProvider.FIELD_CO2, None)
     self.last_price = self.last_co2_data.get(EcoProvider.FIELD_PRICE, None)
+    #self.last_co2_data = self.last_co2kwh = self.last_price = None
     self.total_co2 = 0.
     self.total_cost = 0.
     self.start_date = datetime.now()
@@ -3172,6 +3339,10 @@ class EcoFreq(object):
     with open(SHM_FILE, "w") as f:
       f.write(" ".join([ts, energy_j, co2_g, cost]))
 
+  def write_mqtt(self):
+    if self.mqtt_logger:
+      self.mqtt_logger.log()
+
   async def spin(self):
     try:
       self.co2logger.print_header()
@@ -3195,6 +3366,7 @@ class EcoFreq(object):
           self.update_co2()
           self.monitor.reset_period() 
         self.write_shm()  
+        self.write_mqtt()
         if self.idle_policy:
           if self.idle_policy.check_idle():
             self.monitor.update(0)
@@ -3209,7 +3381,7 @@ class EcoFreq(object):
       self.co2policy.reset()
       
   async def main(self):
-    spins = [self.server.spin(), self.spin()]
+    spins = [self.server.spin(), MQTTManager.run(), self.spin()]
     tasks = [asyncio.create_task(t) for t in spins]
     for t in tasks:
       await t
