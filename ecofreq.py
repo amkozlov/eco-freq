@@ -52,6 +52,12 @@ def write_value(fname, val):
 
 def safe_round(val):
   return round(val) if (isinstance(val, float)) else val
+
+def getbool(x):
+  if isinstance(x, str):
+    return True if x.lower() in ['1', 'y', 'yes', 'true', 'on'] else False
+  else:
+    return x
     
 class NAFormatter(string.Formatter):
     def __init__(self, missing='NA'):
@@ -2021,9 +2027,10 @@ class GridStatusIOProvider(EcoProvider):
 
 class WattTimeProvider(EcoProvider):
   LABEL="watttime"
-  URL_BASE = "https://api2.watttime.org/"
-  URL_LOGIN = URL_BASE + "v2/login"
-  URL_INDEX = URL_BASE + "index"
+  URL_BASE = "https://api.watttime.org/"
+  URL_LOGIN = URL_BASE + "login"
+  URL_INDEX = URL_BASE + "v3/signal-index"
+  URL_FORECAST = URL_BASE + "v3/forecast"
   LB_TO_KG = 0.45359237
   
   def __init__(self, config, glob_interval):
@@ -2032,21 +2039,21 @@ class WattTimeProvider(EcoProvider):
     
   def get_config(self):
     cfg = super().get_config()
-    if self.zone:
-      cfg["zone"] = self.zone
+    if self.region:
+      cfg["region"] = self.region
     return cfg
 
   def set_config(self, config):
     self.username = config.get("username", None)
     self.password = config.get("password", None)
-    self.zone = config.get("zone", "auto")
+    self.region = config.get("region", None)
+    self.signal_type = config.get("signaltype", "co2_moer")
+    self.use_index = getbool(config.get("useindex", True))
+    self.use_forecast = getbool(config.get("useforecast", True))
     
-    if self.zone.lower().startswith("auto"):
-      self.coord_lat, self.coord_lon = GeoHelper.get_my_coords()
-      if not self.coord_lat or not self.coord_lon:
-         print ("ERROR: Failed to autodetect location!")
-         print ("Please make sure you have internet connetion, or specify country code in the config file.")
-         sys.exit(-1)
+    if not self.region:
+      print ("ERROR: WattTime: region code is missing!")
+      sys.exit(-1)
     
     self.update_url()
 
@@ -2054,29 +2061,39 @@ class WattTimeProvider(EcoProvider):
     rsp = requests.get(self.URL_LOGIN, auth=HTTPBasicAuth(self.username, self.password))
     self.token = rsp.json()['token']
 
-  def remap(self, jsdict):
-    data = {}
-    data[EcoProvider.FIELD_INDEX] = jsdict["percent"] 
-    if "moer" in jsdict:  
-      data[EcoProvider.FIELD_CO2] = float(jsdict["moer"]) * self.LB_TO_KG 
+  def remap(self, jsdict, data={}):
+    jsdata = jsdict["data"]
+    jsmeta = jsdict["meta"]
+    val = jsdata[0]["value"]
+    if jsmeta["units"] == "percentile":
+      data[EcoProvider.FIELD_INDEX] = val  
+    elif jsmeta["units"] == "lbs_co2_per_mwh":  
+      data[EcoProvider.FIELD_CO2] = float(val) * self.LB_TO_KG 
       
 #    print(data)
     return data
 
   def update_url(self):
-    self.api_url = self.URL_INDEX
+    self.api_url_index = self.URL_INDEX if self.use_index else None
+    self.api_url_forecast = self.URL_FORECAST if self.use_forecast else None
 
   def get_data(self):
     self.login()
     headers = {'Authorization': 'Bearer {}'.format(self.token)}
-    if self.zone and self.zone != "auto":
-      params = {'ba': self.zone}
-    elif self.coord_lat and self.coord_lon:
-      params = {'latitude': self.coord_lat, 'longitude': self.coord_lon}
-
+    params = {'region': self.region, 'signal_type': self.signal_type}
     try:
-      rsp = requests.get(self.api_url, headers=headers, params=params)
-      data = self.remap(rsp.json())
+      data = {}
+      if self.api_url_index: 
+        rsp = requests.get(self.api_url_index, headers=headers, params=params)
+        js = rsp.json()
+#        print(js)
+        self.remap(js, data)
+      if self.api_url_forecast: 
+        params["horizon_hours"] = 0
+        rsp = requests.get(self.api_url_forecast, headers=headers, params=params)
+        js = rsp.json()
+#        print(js)
+        self.remap(js, data)
     except:
       e = sys.exc_info()
       print ("Exception: ", e)

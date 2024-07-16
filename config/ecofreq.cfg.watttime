@@ -14,7 +14,9 @@ price=gridstatus.io
 [watttime]
 username=YOUR_USERNAME
 password=YOUR_PASSWORD
-#zone=CAISO_NORTH
+region=CAISO_NORTH
+#UseIndex=False
+#UseForecast=False
 
 [gridstatus.io]
 # Get API token here: https://www.gridstatus.io/api
