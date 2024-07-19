@@ -4,7 +4,6 @@ import sys, json
 import urllib.request
 import requests
 from requests.auth import HTTPBasicAuth
-from aiomqtt import Client, MqttError
 from subprocess import call,check_output,STDOUT,DEVNULL,CalledProcessError
 from datetime import datetime
 import time
@@ -21,6 +20,12 @@ import copy
 from math import ceil
 from inspect import isclass
 from _collections import deque
+
+try:
+  from aiomqtt import Client, MqttError
+  mqtt_found = True
+except:
+  mqtt_found = False
 
 HOMEDIR = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = "/var/log/ecofreq.log"
@@ -756,8 +761,42 @@ class AMDRaplMsrHelper(object):
     filename = cls.cpu_msr_file(cpu)
     return cls.get_energy_range(filename)
 
-class LinuxCgroupV1Helper(object):
+class LinuxCgroupHelper(object):
   CGROUP_FS_PATH="/sys/fs/cgroup/"
+
+  @classmethod
+  def available(cls):
+    return os.path.exists(cls.CGROUP_FS_PATH)
+  
+  @classmethod
+  def subsystems(cls, grp=""):
+    sub = []
+    if cls.available():
+      for sname in ["cpu", "freezer"]:
+        if cls.enabled(sname, grp):
+          sub.append(sname)
+    return sub
+  
+  @classmethod
+  def info(cls):
+    print("Linux cgroup available: ", end ="")
+    if cls.available():
+      print("YES", end ="")
+      helper = None
+      if LinuxCgroupV1Helper.enabled():
+        helper = LinuxCgroupV1Helper
+      elif LinuxCgroupV2Helper.enabled():
+        helper = LinuxCgroupV2Helper
+        
+      if helper:
+        print(" ({}) ({})".format(helper.VERSION, ",".join(helper.subsystems())))
+      else:
+        print("(disabled)")
+    else:
+      print("NO")
+
+class LinuxCgroupV1Helper(LinuxCgroupHelper):
+  VERSION = "v1"
   PROCS_FILE="cgroup.procs"
   CFS_QUOTA_FILE="cpu.cfs_quota_us"
   CFS_PERIOD_FILE="cpu.cfs_period_us"
@@ -796,12 +835,34 @@ class LinuxCgroupV1Helper(object):
     return read_int_value(cls.cfs_period_file(grp))
 
   @classmethod
+  def set_cpu_cfs_period_us(cls, grp, period_us):
+    return write_value(cls.cfs_period_file(grp), period_us)
+
+  @classmethod
   def get_cpu_cfs_quota_us(cls, grp):
     return read_int_value(cls.cfs_quota_file(grp))
 
   @classmethod
-  def set_cpu_cfs_quota_us(cls, grp, quota):
-    write_value(cls.cfs_quota_file(grp), int(quota))
+  def set_cpu_cfs_quota_us(cls, grp, quota_us):
+    write_value(cls.cfs_quota_file(grp), int(quota_us))
+    
+  @classmethod
+  def set_cpu_quota(cls, grp, quota, period=None):
+    if period:
+      cls.set_cpu_cfs_period_us(grp, period)
+    else:
+      period = cls.get_cpu_cfs_period_us(grp)
+    quota_us = int(quota * period)  
+    cls.set_cpu_cfs_quota_us(grp, quota_us)
+    
+  @classmethod
+  def get_cpu_quota(cls, grp, ncores):
+    quota_us = cls.get_cpu_cfs_quota_us(grp)
+    period_us = cls.get_cpu_cfs_period_us(grp)
+    if quota_us == -1:
+      return ncores
+    else:
+      return float(quota_us) / period_us
 
   @classmethod
   def freeze(cls, grp):
@@ -816,12 +877,69 @@ class LinuxCgroupV1Helper(object):
     write_value(cls.procs_file(grp), pid)
 
   @classmethod
-  def available(cls):
-    return os.path.exists(cls.CGROUP_FS_PATH)
-
-  @classmethod
   def enabled(cls, sub="cpu", grp=""):
     return os.path.isfile(cls.procs_file(sub, grp))
+
+class LinuxCgroupV2Helper(LinuxCgroupHelper):
+  VERSION = "v2"
+  PROCS_FILE="cgroup.procs"
+  CPU_QUOTA_FILE="cpu.max"
+  FREEZER_STATE_FILE="cgroup.freeze"
+
+  @classmethod
+  def subsys_file(cls, grp, fname):
+    return os.path.join(cls.CGROUP_FS_PATH, grp, fname)
+  
+  @classmethod
+  def procs_file(cls, grp):
+    return cls.subsys_file(grp, cls.PROCS_FILE)
+  
+  @classmethod
+  def freezer_state_file(cls, grp):
+    return cls.subsys_file(grp, cls.FREEZER_STATE_FILE)
+  
+  @classmethod
+  def cpu_quota_file(cls, grp):
+    return cls.subsys_file(grp, cls.CPU_QUOTA_FILE)
+
+  @classmethod
+  def freeze(cls, grp):
+    write_value(cls.freezer_state_file(grp), "1")
+
+  @classmethod
+  def unfreeze(cls, grp):
+    write_value(cls.freezer_state_file(grp), "0")
+
+  @classmethod
+  def set_cpu_quota(cls, grp, quota, period=None):
+    fname = cls.cpu_quota_file(grp)
+    old_period  = read_value(fname, 1)
+    if not period:
+      period = old_period
+    if not isinstance(quota, str):
+      quota = quota * int(period)
+#    print(quota, period)  
+    write_value(fname, quota)
+
+  @classmethod
+  def get_cpu_quota(cls, grp, ncores):
+    fname = cls.cpu_quota_file(grp)
+    quota, period = read_value(fname).split(" ")
+    if quota == "max":
+      return ncores
+    else:
+      return float(quota) / int(period)
+   
+  @classmethod
+  def enabled(cls, sub="", grp=""):
+    if not sub:
+      return os.path.isfile(cls.procs_file(grp))
+    elif sub == "cpu":
+      return os.path.isfile(cls.cpu_quota_file(grp))
+    elif sub == "freezer":
+      return os.path.isfile(cls.freezer_state_file(grp))
+    else:
+      return False
 
 class DockerHelper(object):
   CMD_DOCKER = "docker"
@@ -2833,7 +2951,7 @@ class CPUPowerEcoPolicy(CPUEcoPolicy):
     self.set_power(self.pmax)
 
 class CPUCgroupEcoPolicy(CPUEcoPolicy):
-  UNIT={"c": 100000}
+  UNIT={"c": 1}
 
   def __init__(self, config):
     EcoPolicy.__init__(self, config)
@@ -2842,29 +2960,37 @@ class CPUCgroupEcoPolicy(CPUEcoPolicy):
       print ("ERROR: Linux cgroup filesystem not mounted!")
       sys.exit(-1)
 
-    if not LinuxCgroupV1Helper.enabled():
+    if LinuxCgroupV1Helper.enabled():
+      self.helper = LinuxCgroupV1Helper
+    elif LinuxCgroupV2Helper.enabled():
+      self.helper = LinuxCgroupV2Helper
+    else:    
       print ("ERROR: Linux cgroup subsystem is not properly configured!")
       sys.exit(-1)
 
     self.grp = "user.slice" if "cgroup" not in config else config["cgroup"]
     self.use_freeze = True if "cgroupfreeze" not in config else config["cgroupfreeze"]
-    self.use_freeze = self.use_freeze and LinuxCgroupV1Helper.enabled("freezer", self.grp)
+    self.use_freeze = self.use_freeze and self.helper.enabled("freezer", self.grp)
+    
+    if not self.helper.enabled("cpu", self.grp):
+      print ("ERROR: Linux cgroup not found or cpu controller is disabled:", self.grp)
+      sys.exit(-1)
+    
     num_cores = CpuInfoHelper.get_cores()
-    cfs_period = LinuxCgroupV1Helper.get_cpu_cfs_period_us(self.grp)
-    self.qmax = cfs_period * num_cores
-    self.qmin = int(0.1 * cfs_period)
-    self.qstart = LinuxCgroupV1Helper.get_cpu_cfs_quota_us(self.grp)
+    self.qmax = num_cores
+    self.qmin = 0
+    self.qstart = self.helper.get_cpu_quota(self.grp, num_cores)
     self.init_governor(config, self.qmin, self.qmax)
 
-  def set_quota(self, quota_us):
+  def set_quota(self, quota):
     if self.use_freeze:
-      if quota_us == self.qmin:
-        LinuxCgroupV1Helper.freeze(self.grp)
+      if quota == self.qmin:
+        self.helper.freeze(self.grp)
         return
       else:
-        LinuxCgroupV1Helper.unfreeze(self.grp)
-    if quota_us and not self.debug:
-      LinuxCgroupV1Helper.set_cpu_cfs_quota_us(self.grp, quota_us)
+        self.helper.unfreeze(self.grp)
+    if quota and not self.debug:
+      self.helper.set_cpu_quota(self.grp, quota)
 
   def set_co2(self, co2):
     self.quota = self.co2val(co2)
@@ -3461,6 +3587,8 @@ def diag():
   print("")
   IPMIHelper.info()
   print("")
+  LinuxCgroupHelper.info()
+  print("")
   SuspendHelper.info()
   print("")
   
@@ -3480,6 +3608,8 @@ if __name__ == '__main__':
   except PermissionError:
     print(traceback.format_exc())
     print("\nPlease run EcoFreq with root permissions!\n")
+  except SystemExit:
+    pass
   except:
     print("Exception:", traceback.format_exc())
     
