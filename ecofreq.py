@@ -400,6 +400,11 @@ class CpuInfoHelper(object):
     threads = int(cpuinfo["CPU(s)"])
     cores = int(threads / int(cpuinfo["Thread(s) per core"]))
     return cores
+
+  @classmethod
+  def get_sockets(cls):
+    cpuinfo = cls.parse_lscpu()
+    return int(cpuinfo["Socket(s)"])
     
   @classmethod
   def get_tdp_uw(cls):
@@ -672,6 +677,116 @@ class LinuxPowercapHelper(object):
   def set_power_limit(cls, power, unit=UWATT):
     for pkg in cls.package_list(): 
       cls.set_package_power_limit(pkg, power, unit)
+      
+class AMDEsmiHelper(object):
+  CMD_ESMI_TOOL="/opt/e-sms/e_smi/bin/e_smi_tool"
+  MAX_PLIMIT_LABEL="PowerLimitMax (Watts)"
+  CUR_PLIMIT_LABEL="PowerLimit (Watts)"
+  UWATT, MWATT, WATT = 1e-6, 1e-3, 1
+ 
+  @classmethod
+  def run_esmi(cls, params, parse_out=True):
+    cmdline = cls.CMD_ESMI_TOOL + " " + params 
+    try:
+      out = check_output(cmdline, shell=True, stderr=DEVNULL, universal_newlines=True)
+    except CalledProcessError as e:
+      if e.returncode == 210:
+        out = e.output
+      else:
+        raise e  
+    if parse_out:
+      result = {}
+      for line in out.split("\n"):
+        if line:
+          toks = line.split("|")
+          if len(toks) > 2:
+            field = toks[1].strip()
+            result[field] = toks[2:-1]
+#      print(result)    
+      return result  
+
+  @classmethod
+  def available(cls):
+     try:
+       out = cls.run_esmi("-v")
+       return True
+     except CalledProcessError:
+       return False
+
+  @classmethod
+  def enabled(cls, pkg=0):
+     try:
+       if cls.get_package_power_limit(pkg):
+         return True
+       else:
+         return False
+     except CalledProcessError:
+       return False
+
+  @classmethod
+  def get_field(cls, out, field, pkg=0):
+    if pkg >= 0:
+      return out[field][pkg]
+    else:
+      return out[field]
+
+  @classmethod
+  def get_package_hw_max_power(cls, pkg, unit=WATT):
+    if cls.available():
+      params = "--showsockpower"
+      out = cls.run_esmi(params)
+      limit_w = float(cls.get_field(out, cls.MAX_PLIMIT_LABEL, pkg)) 
+      return limit_w / unit 
+    else:
+      return None
+
+  @classmethod
+  def get_package_power_limit(cls, pkg, unit=WATT):
+    if cls.available():
+      params = "--showsockpower"
+      out = cls.run_esmi(params)
+      limit_w = float(cls.get_field(out, cls.CUR_PLIMIT_LABEL, pkg)) 
+      return limit_w / unit 
+    else:
+      return None
+
+  @classmethod
+  def get_power_limit(cls, unit=WATT):
+    if cls.available():
+      params = "--showsockpower"
+      out = cls.run_esmi(params)
+      pkg_limit_w = cls.get_field(out, cls.CUR_PLIMIT_LABEL, -1)
+      limit_w = sum([float(x) for x in pkg_limit_w]) 
+      return limit_w / unit 
+    else:
+      return None
+
+  @classmethod
+  def set_package_power_limit(cls, pkg, power, unit=WATT):
+    # value must be in mW !
+    val = round(power * unit / cls.MWATT)
+    params = "--setpowerlimit {:d} {:d}".format(pkg, val)
+    cls.run_esmi(params, False)
+
+  @classmethod
+  def set_power_limit(cls, power, unit=WATT):
+    num_sockets = CpuInfoHelper.get_sockets()
+    for pkg in range(num_sockets):
+      cls.set_package_power_limit(pkg, power, unit)
+    
+  @classmethod
+  def info(cls):
+    if cls.available():
+      outfmt = "ESMI CPU{0}: max_hw_limit = {1} W, current_limit = {2} W" 
+      params = ""
+      out = cls.run_esmi(params)
+      num_sockets = int(cls.get_field(out, "NR_SOCKETS"))
+      for pkg in range(num_sockets):
+        maxp = float(cls.get_field(out, cls.MAX_PLIMIT_LABEL, pkg))
+        curp = float(cls.get_field(out, cls.CUR_PLIMIT_LABEL, pkg))
+        print(outfmt.format(pkg, maxp, curp))
+    else:
+        print("AMD E-SMI tool not found.")
 
 # Code adapted from s-tui: 
 # https://github.com/amanusk/s-tui/commit/5c87727f5a2364697bfce84a0b688c1a6d2b3250
@@ -2870,6 +2985,8 @@ class CPUEcoPolicy(EcoPolicy):
     if c == "auto":
       if LinuxPowercapHelper.available() and LinuxPowercapHelper.enabled():
         c = "power"
+      elif AMDEsmiHelper.available() and AMDEsmiHelper.enabled():
+        c = "power"
       elif CpuFreqHelper.available():
         c = "frequency"
       else:
@@ -2918,29 +3035,34 @@ class CPUFreqEcoPolicy(CPUEcoPolicy):
     self.set_freq(self.fmax)
 
 class CPUPowerEcoPolicy(CPUEcoPolicy):
-  UNIT={"W": LinuxPowercapHelper.WATT}
+  UNIT={"W": 1}
   
   def __init__(self, config):
     EcoPolicy.__init__(self, config)
     
-    if not LinuxPowercapHelper.available():
-      print ("ERROR: RAPL powercap driver not found!")
-      sys.exit(-1)
+    if AMDEsmiHelper.available():
+      self.helper = AMDEsmiHelper
+    else:
+      self.helper = LinuxPowercapHelper   
+    
+      if not LinuxPowercapHelper.available():
+        print ("ERROR: RAPL powercap driver not found!")
+        sys.exit(-1)
+  
+      if not LinuxPowercapHelper.enabled():
+        print ("ERROR: RAPL driver found, but powercap is disabled!")
+        print ("Please try to enable it as described here: https://askubuntu.com/a/1231490")
+        print ("If it does not work, switch to frequency control policy.")
+        sys.exit(-1)
 
-    if not LinuxPowercapHelper.enabled():
-      print ("ERROR: RAPL driver found, but powercap is disabled!")
-      print ("Please try to enable it as described here: https://askubuntu.com/a/1231490")
-      print ("If it does not work, switch to frequency control policy.")
-      sys.exit(-1)
-
-    self.pmax = LinuxPowercapHelper.get_package_hw_max_power(0)
-    self.pmin = int(0.1*self.pmax)
-    self.pstart = LinuxPowercapHelper.get_package_power_limit(0)
+    self.pmax = self.helper.get_package_hw_max_power(0, self.helper.WATT)
+    self.pmin = 0.1 * self.pmax
+    self.pstart = self.helper.get_package_power_limit(0, self.helper.WATT)
     self.init_governor(config, self.pmin, self.pmax)
 
-  def set_power(self, power_uw):
-    if power_uw and not self.debug:
-      LinuxPowercapHelper.set_power_limit(power_uw)
+  def set_power(self, power_w):
+    if power_w and not self.debug:
+      self.helper.set_power_limit(power_w, self.helper.WATT)
 
   def set_co2(self, co2):
     self.power = self.co2val(co2)
@@ -3326,6 +3448,8 @@ class EcoLogger(object):
       max_freq = round(CpuFreqHelper.get_gov_max_freq(unit=CpuFreqHelper.MHZ))
     if LinuxPowercapHelper.available():
       cpu_max_power = LinuxPowercapHelper.get_power_limit(LinuxPowercapHelper.WATT)
+    elif AMDEsmiHelper.available():
+      cpu_max_power = AMDEsmiHelper.get_power_limit(AMDEsmiHelper.WATT)
     if NvidiaGPUHelper.available():
       gpu_max_power = NvidiaGPUHelper.get_power_limit()
     cols = [ts, safe_round(co2kwh), max_freq, safe_round(avg_freq), cpu_max_power, gpu_max_power, avg_power, energy, co2period]
@@ -3580,6 +3704,8 @@ def diag():
   CpuInfoHelper.info()
   print("")
   LinuxPowercapHelper.info()
+  print("")
+  AMDEsmiHelper.info()
   print("")
   CpuFreqHelper.info()
   print("")

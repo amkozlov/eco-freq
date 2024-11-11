@@ -11,8 +11,11 @@ In EcoFreq, dynamic power scaling policy consists of two components:
 [policy]
 control=power
 ```
-This method defines direct power cap for CPU (via RAPL) or GPU (`nvidia-smi -pl`).
-Supported on modern Intel CPUs (since Sandy Bridge, ca. 2012) and NVIDIA GPUs. 
+This method defines direct power cap for CPU or GPU.
+Supported hardware:
+* Intel CPUs (Sandy Bridge and later, ca. 2012+) - via RAPL
+* AMD CPUs ([Zen3/Zen4 and later](https://github.com/amd/esmi_ib_library?tab=readme-ov-file#supported-hardware)) - via [E-SMI](https://github.com/amd/esmi_ib_library), `e_smi_tool` must be installed under `/opt/e-sms/e_smi/bin/` (default)
+* NVIDIA GPUs (most modern consumer and HPC cards) - via  `nvidia-smi -pl` 
 
 
 ### `frequency` cap (DVFS)
