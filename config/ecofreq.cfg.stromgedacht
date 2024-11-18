@@ -17,6 +17,10 @@ price=energycharts
 # Price Option3: dynamic price (tibber, octopus or awattar)
 #price=tibber
 
+[stromgedacht]
+PostCode=69118
+#IntegerStates=True
+
 [co2signal]
 #Please get your free API token here: https://co2signal.com/
 Token=YOUR_TOKEN
@@ -29,20 +33,9 @@ Country=DE
 PostCode=69118
 PriceZone=DE-LU
 
-[awattar]
-# Awattar is available in Germany (DE) and Austria (AT), see https://www.awattar.at/
-Country=DE
-FixedPrice=15.43
-VAT=0.19
-
 [tibber]
 Token=5K4MVS-OjfWhK_4yrjOlFe1F6kJXPVf7eQYggo8ebAE
 UseCache=True
-
-[octopus]
-Product=AGILE-18-02-21
-Tariff=E-1R-AGILE-18-02-21-C
-UseCache=F
 
 [policy]
 Control=auto
