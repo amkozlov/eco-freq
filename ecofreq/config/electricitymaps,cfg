@@ -1,0 +1,48 @@
+[general]
+logco2extra=true
+
+[provider]
+# Query interval in seconds
+Interval=600
+# Use ElectricityMaps for carbon accounting
+all=electricitymaps
+# Price Option1 (default): wholesale day-ahead market price by EnergyCharts
+price=energycharts
+# Price Option2: constant price in ct/kwh
+#price=const:30
+# Price Option3: dynamic price (tibber, octopus or awattar)
+#price=tibber
+
+[electricitymaps]
+Zone=ES
+#Token=
+DisableEstimations=False
+EmissionFactorType=lifecycle
+
+[energycharts]
+#List of available countries/price zones: https://api.energy-charts.info/#/
+Country=ES
+#PostCode=
+PriceZone=ES
+
+[tibber]
+Token=5K4MVS-OjfWhK_4yrjOlFe1F6kJXPVf7eQYggo8ebAE
+UseCache=True
+
+[octopus]
+Product=AGILE-18-02-21
+Tariff=E-1R-AGILE-18-02-21-C
+UseCache=F
+
+[policy]
+Control=auto
+# No dynamic power scaling by default:
+#DefaultGovernor=maxperf
+# Sample powercap policy: >100 g/kWh -> 70%, >200 g/kWh -> 50%
+Metric=co2
+DefaultGovernor=step:100=0.7:200=0.5
+Governor=default
+
+[monitor]
+PowerSensor=auto
+Interval=5

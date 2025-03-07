@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 
-import os
-import sys
 import argparse
 from datetime import datetime, timedelta
-from subprocess import call,STDOUT,DEVNULL,CalledProcessError
 
-from ecofreq import SHM_FILE, JOULES_IN_KWH, TS_FORMAT
-from ecofreq import EcoClient, EcoFreq
+from ecofreq.config import JOULES_IN_KWH, TS_FORMAT
+from ecofreq.ipc import EcoClient
+from ecofreq.ecofreq import EcoFreq
 
 def safe_round(val, digits=0):
   return round(val, digits) if (isinstance(val, float)) else val
@@ -20,7 +18,7 @@ def parse_args():
   args = parser.parse_args()
   return args
 
-def cmd_info(args):
+def cmd_info(ec, args):
   info = ec.info()
   print("EcoFreq is RUNNING")
   print("")
@@ -79,7 +77,7 @@ def provider_str(prov):
     provlist.append(m + " = " + provstr)
   return ", ".join(provlist)
   
-def cmd_policy(args):
+def cmd_policy(ec, args):
   policy = ec.get_policy()
 
   if len(args.cmd_args) > 0:
@@ -118,7 +116,7 @@ def wildcard_set(d, attr, params, idx):
   if len(params) > idx and params[idx] != "*":
     d[attr] = params[idx]
 
-def cmd_provider(args):
+def cmd_provider(ec, args):
   prov = ec.get_provider()
   
 #  print(prov)
@@ -157,17 +155,17 @@ def cmd_provider(args):
     # get policy
     print("CO2 provider:", provider_str(prov))
 
-def run_command(args):
+def run_command(ec, args):
   if args.command == "info":
-    cmd_info(args)
+    cmd_info(ec, args)
   elif args.command == "policy":  
-    cmd_policy(args)      
+    cmd_policy(ec, args)      
   elif args.command == "provider":  
-    cmd_provider(args)      
+    cmd_provider(ec, args)      
   else:
     print("Unknown command:", args.command)
 
-if __name__ == '__main__':
+def main():
   ec = EcoClient()
 #  print(ec.info())
 
@@ -175,8 +173,9 @@ if __name__ == '__main__':
 #  print(args)
   
   try:
-    run_command(args)
+    run_command(ec, args)
   except ConnectionRefusedError:
     print("ERROR: Connection refused! Please check that EcoFreq daemon is running.")
 
-
+if __name__ == '__main__':
+  main()

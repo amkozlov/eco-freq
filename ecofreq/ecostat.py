@@ -2,13 +2,11 @@
 
 import sys
 from datetime import datetime, timedelta
-import time
 import os
-import configparser
 import argparse
-import string
 
-from ecofreq import TS_FORMAT, JOULES_IN_KWH
+from ecofreq import __version__
+from ecofreq.config import TS_FORMAT, JOULES_IN_KWH
 
 LOG_FILE = "/var/log/ecofreq.log"
 DATE_FORMAT = "%Y-%m-%d"
@@ -24,16 +22,16 @@ FIELD_CO2 = "CO2 [g]"
 FIELD_IDLE = "State"
 LOG_FIELDS = [FIELD_TS, FIELD_CO2KWH, FIELD_FMAX, FIELD_FAVG, FIELD_PMAX, FIELD_PAVG, FIELD_ENERGY, FIELD_CO2]
 
-def parse_timestamp(str, exit_on_error=False):
+def parse_timestamp(ts_str, exit_on_error=False):
   ts = None
   for fmt in TS_FORMAT, DATE_FORMAT: 
     try:
-      ts = datetime.strptime(str.strip(), fmt)
+      ts = datetime.strptime(ts_str.strip(), fmt)
     except ValueError:
       pass
     
   if not ts and exit_on_error:
-    print("ERROR: Invalid date/time: ", str)
+    print("ERROR: Invalid date/time: ", ts_str)
     sys.exit(-1)
   else:  
     return ts  
@@ -150,7 +148,7 @@ class EcoStat(object):
         energy = float(toks[self.energy_idx]) 
         self.energy += energy 
         if sample_idle:
-           self.idle_energy += energy
+          self.idle_energy += energy
 
         co2kwh = toks[self.co2kwh_idx].strip()
         if co2kwh != "NA":
@@ -167,9 +165,9 @@ class EcoStat(object):
             idle_na_energy += energy
           
         if sample_co2:
-           self.co2 += sample_co2
-           if sample_idle:
-             self.idle_co2 += sample_co2
+          self.co2 += sample_co2
+          if sample_idle:
+            self.idle_co2 += sample_co2
           
         self.samples += 1
         
@@ -219,12 +217,14 @@ def parse_args():
   args = parser.parse_args()
   return args
 
-if __name__ == '__main__':
-
+def main():
   args = parse_args()
 
-  print("EcoStat v0.0.1\n")
+  print(f"EcoStat v{__version__}\n")
 
   es = EcoStat(args)
   es.compute_stats()
   es.print_stats()
+
+if __name__ == '__main__':
+  main()

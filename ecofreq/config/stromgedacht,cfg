@@ -1,0 +1,51 @@
+[general]
+logco2extra=true
+
+[provider]
+# Query interval in seconds
+Interval=600
+# Use StromGedacht API:  
+all=stromgedacht
+# CO2 Option1: use CO2Signal for carbon accounting (API token required!)
+#co2=co2signal
+# CO2 Option2: use constant carbon intensity (gCO2e/kwh) 
+co2=const:350
+# Price Option1: wholesale day-ahead market price by EnergyCharts
+price=energycharts
+# Price Option2: constant price in ct/kwh
+#price=const:30
+# Price Option3: dynamic price (tibber, octopus or awattar)
+#price=tibber
+
+[stromgedacht]
+PostCode=69118
+#IntegerStates=True
+
+[co2signal]
+#Please get your free API token here: https://co2signal.com/
+Token=YOUR_TOKEN
+#Please look up your grid zone here: https://www.electricitymap.org
+Country=DE
+
+[energycharts]
+#List of available countries/price zones: https://api.energy-charts.info/#/
+Country=DE
+PostCode=69118
+PriceZone=DE-LU
+
+[tibber]
+Token=5K4MVS-OjfWhK_4yrjOlFe1F6kJXPVf7eQYggo8ebAE
+UseCache=True
+
+[policy]
+Control=auto
+# No dynamic power scaling by default:
+#DefaultGovernor=maxperf
+# Sample powercap policy: red(grid congestion) + orange(low RE) -> 50%, greed(normal operation) -> 70%, supergreen(RE surplus) -> 100%
+Metric=index
+DefaultGovernor=list:red=0.5:orange=0.5:green=0.7:supergreen=max
+Governor=default
+
+[monitor]
+PowerSensor=auto
+Interval=5

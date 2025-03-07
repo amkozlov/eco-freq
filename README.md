@@ -16,7 +16,7 @@ TL;DR Just look at those awesome plots from [electricitymap.org](https://www.ele
 
 Prerequisites:
  - Linux system (tested with Ubuntu and CentOS)
- - Python3.7+ with `pip`
+ - Python3.8+ with `pip` (`pipx` recommended)
  - (optional) API token -> [Which real-time CO2/price provider to use?](https://github.com/amkozlov/eco-freq/blob/main/config/README.md/) 
  - (optional) [`ipmitool`](https://github.com/ipmitool/ipmitool) to use IPMI power measurements
 
@@ -24,7 +24,7 @@ Prerequisites:
 Please run installer script which will register `systemd` service and create a basic config file for EcoFreq:
 
 ```
-sudo ./install.sh
+pipx install ecofreq
 ```
 
 Alternatively, you can specify a custom config file (see [examples](https://github.com/amkozlov/eco-freq/blob/main/config)):

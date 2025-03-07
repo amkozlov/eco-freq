@@ -1,0 +1,46 @@
+[build-system]
+requires = ['hatchling', 'wheel']
+build-backend = "hatchling.build"
+
+
+[project]
+name = "ecofreq"
+version = "0.0.3"
+authors = [
+  { name="Oleksiy Kozlov", email="alexey.kozlov@h-its.org" },
+]
+description = "EcoFreq: Dynamic carbon- and price-aware power scaling for CPUs and GPUs"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "License :: Free for non-commercial use",
+#CC-BY-NC-SA-4.0
+]
+dependencies = [
+    "requests",
+    "typing-extensions",
+    "elevate"
+]
+
+[project.optional-dependencies]
+mqtt = ["aiomqtt"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["ecofreq"]
+
+[tool.hatch.build.targets.sdist]
+only-include = ["ecofreq/", "docs/", "*.md", "LICENSE.txt" ]
+
+[project.urls]
+Homepage = "https://github.com/amkozlov/eco-freq"
+Issues = "https://github.com/amkozlov/eco-freq/issues"
+
+[project.scripts]
+ecofreq = "ecofreq.ecofreq:main"
+ecorun = "ecofreq.ecorun:main"
+ecoctl = "ecofreq.ecoctl:main"
+ecostat = "ecofreq.ecostat:main"
+

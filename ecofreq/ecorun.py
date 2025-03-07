@@ -3,10 +3,10 @@
 import os
 import sys
 import time
-from subprocess import call,STDOUT,DEVNULL,CalledProcessError
+from subprocess import call
 
-from ecofreq import SHM_FILE, JOULES_IN_KWH
-from ecofreq import EcoClient
+from ecofreq.config import SHM_FILE, JOULES_IN_KWH
+from ecofreq.ipc import EcoClient
 
 def read_shm():
   with open(SHM_FILE) as f:

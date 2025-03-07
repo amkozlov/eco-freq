@@ -1,0 +1,49 @@
+[general]
+#logco2extra=true
+
+[provider]
+# Query interval in seconds
+Interval=600
+# CO2 Option 1: Use ElectricityMaps v3 API 
+all=electricitymaps
+# CO2 Option 2: Use legacy CO2Signal API (requires token) 
+#all=co2signal
+# Price Option1: constant price in ct/kwh
+price=const:30
+# Price Option2: dynamic price (e.g. tibber)
+#price=tibber
+
+[electricitymaps]
+Zone=CL-SEN
+#Token=
+DisableEstimations=False
+EmissionFactorType=lifecycle
+
+[co2signal]
+#Please get your free API token here: https://co2signal.com/
+Token=YOUR_TOKEN
+#Please look up your grid zone here: https://www.electricitymap.org
+# Example: Chile
+Country=CL-SEN
+
+[tibber]
+Token=5K4MVS-OjfWhK_4yrjOlFe1F6kJXPVf7eQYggo8ebAE
+UseCache=True
+
+[octopus]
+Product=AGILE-18-02-21
+Tariff=E-1R-AGILE-18-02-21-C
+UseCache=F
+
+[policy]
+Control=auto
+# No dynamic power scaling by default:
+#DefaultGovernor=maxperf
+# Sample powercap policy: >100 g/kWh -> 70%, >300 g/kWh -> 50%
+Metric=co2
+DefaultGovernor=step:100=0.7:300=0.5
+Governor=default
+
+[monitor]
+PowerSensor=auto
+Interval=5

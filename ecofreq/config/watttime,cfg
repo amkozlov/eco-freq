@@ -1,0 +1,44 @@
+[general]
+logco2extra=true
+
+[provider]
+# Query interval in seconds
+Interval=600
+# Use WattTime carbpn API 
+all=watttime
+# Price Option1: constant price in ct/kwh
+#price=const:30
+# Price Option2: Day-ahead location prices from gridstatus.io
+price=gridstatus.io
+
+[watttime]
+username=YOUR_USERNAME
+password=YOUR_PASSWORD
+region=CAISO_NORTH
+#UseIndex=False
+#UseForecast=False
+
+[gridstatus.io]
+# Get API token here: https://www.gridstatus.io/api
+Token=YOUR_TOKEN
+ISO=ercot
+Location=HB_NORTH
+# Available datasets: https://www.gridstatus.io/datasets
+#Dataset=ercot_spp_day_ahead_hourly
+#PriceField=spp
+
+[policy]
+Control=auto
+# No dynamic power scaling by default:
+#DefaultGovernor=maxperf
+# Use relative (percentile) carbon intesity
+Metric=index
+DefaultGovernor=step:33=0.8:66=0.6
+# Use absolute marginal CO2 intensity (MOER): >200 g/Kwh -> 80%, >400 g/kWh -> 60%   
+#Metric=co2
+#DefaultGovernor=step:200=0.8:400=0.6
+Governor=default
+
+[monitor]
+PowerSensor=auto
+Interval=5
