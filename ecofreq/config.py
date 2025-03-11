@@ -8,5 +8,6 @@ TS_FORMAT = "%Y-%m-%dT%H:%M:%S"
 HOMEDIR = pathlib.Path(__file__).parent
 DATADIR = HOMEDIR / "data"
 CONFIGDIR = HOMEDIR / "config"
+SCRIPTDIR = HOMEDIR / "scripts"
 LOG_FILE = "/var/log/ecofreq.log"
 SHM_FILE = "/dev/shm/ecofreq"

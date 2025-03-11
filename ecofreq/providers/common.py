@@ -2,6 +2,8 @@ import random
 import os.path
 from _collections import deque
 
+from ecofreq.config import HOMEDIR
+
 class EcoProvider(object):
   LABEL=None
   FIELD_CO2='co2'
@@ -97,6 +99,8 @@ class MockEcoProvider(EcoProvider):
     co2range = '100-800'
     co2range = config.get('co2range', co2range)
     self.co2file = config.get('co2file', None)
+    if self.co2file and not os.path.isabs(self.co2file):
+      self.co2file = str(HOMEDIR / self.co2file) 
     self.co2min, self.co2max = [int(x) for x in co2range.split("-")]
     self.read_co2_file()
 

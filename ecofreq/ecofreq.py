@@ -7,6 +7,7 @@ import argparse
 import heapq
 import traceback
 import copy
+import getpass
 
 import ecofreq.helpers as efh
 
@@ -19,6 +20,7 @@ from ecofreq.monitors.manager import MonitorManager
 from ecofreq.providers.manager import EcoProviderManager, EcoProvider
 from ecofreq.policy.manager import EcoPolicyManager
 from ecofreq.policy.idle import IdlePolicy
+from ecofreq.install import EcofreqInstaller
 
 class EcoFreqController(object):
 
@@ -374,17 +376,57 @@ class EcoFreq(object):
     tasks = [asyncio.create_task(t) for t in spins]
     for t in tasks:
       await t
+      
+def cmd_install(args):
+  EcofreqInstaller.install(args)
+
+def cmd_remove(args):
+  EcofreqInstaller.uninstall(args)
+
+def cmd_info(args):
+  print_sysinfo()
+
+def cmd_showcfg(args):
+  parser = read_config(args)
+  parser.write(sys.stdout) 
 
 def parse_args():
   parser = argparse.ArgumentParser()
   parser.add_argument("-c", dest="cfg_file", default=None, help="Config file name.")
-  parser.add_argument("-d", dest="diag", action="store_true", help="Show system info and exit.")
   parser.add_argument("-g", dest="governor", default=None, help="Power governor (off = no power scaling).")
   parser.add_argument("-l", dest="log_fname", default=None, help="Log file name.")
   parser.add_argument("-t", dest="co2token", default=None, help="CO2Signal token.")
   parser.add_argument("-i", dest="interval", default=None, help="Provider polling interval in seconds.")
   parser.add_argument("--user", dest="usermode", default=False, action="store_true", 
                       help="Run in rootless mode (limited functionality)")
+  
+  subparsers = parser.add_subparsers(dest="subcommand")
+  install_parser = subparsers.add_parser(
+      "install", help="Install EcoFreq systemd service and configure permissions."
+  )
+  try:
+    real_login = os.getlogin()
+  except:
+    real_login = None  
+  install_parser.add_argument("-u", dest="duser", default=real_login, 
+                              help="User to run EcoFreq daemon")
+  install_parser.set_defaults(func=cmd_install)  
+
+  remove_parser = subparsers.add_parser(
+      "remove", help="Remove EcoFreq systemd service."
+  )
+  remove_parser.set_defaults(func=cmd_remove)  
+
+  info_parser = subparsers.add_parser(
+      "info", help="Show system info and exit."
+  )
+  info_parser.set_defaults(func=cmd_info)  
+
+  showcfg_parser = subparsers.add_parser(
+      "showcfg", help="Print EcoFreq configuration."
+  )
+  showcfg_parser.set_defaults(func=cmd_showcfg, usermode=True)  
+  
   args = parser.parse_args()
   return args
 
@@ -416,17 +458,19 @@ def read_config(args):
  
   if args:
     if args.co2token:
-      parser["co2signal"]["token"] = args.co2token
+      if "all" in parser["provider"]:
+        prov = parser["provider"]["all"]
+        parser[prov]["token"] = args.co2token
     if args.log_fname:
       parser["general"]["LogFile"] = args.log_fname
     if args.governor:
       parser["policy"]["Governor"] = args.governor
     if args.interval:
       parser["provider"]["interval"] = args.interval
-
+      
   return parser
 
-def diag():
+def print_sysinfo():
   print(f"EcoFreq v{__version__} (c) 2025 Oleksiy Kozlov\n")
   efh.CpuInfoHelper.info()
   print("")
@@ -452,16 +496,22 @@ def main():
     print("\nTrying to obtain root permissions, please enter your password if requested...")
     from elevate import elevate
     elevate(graphical=False)
+    
+  # handle special commands: install, info etc. 
+  if args.subcommand:
+    if hasattr(args, "func"):
+        args.func(args)    
+    return    
 
+  # normal startup
   try:
-    diag()
+    print_sysinfo()
 
-    if not args.diag:
-      cfg = read_config(args)
-      ef = EcoFreq(cfg)
-      ef.info()
-      print("")
-      asyncio.run(ef.main())
+    cfg = read_config(args)
+    ef = EcoFreq(cfg)
+    ef.info()
+    print("")
+    asyncio.run(ef.main())
   except PermissionError:
     print(traceback.format_exc())
     print("\nPlease run EcoFreq with root permissions!\n")
@@ -470,7 +520,7 @@ def main():
   except:
     print("Exception:", traceback.format_exc())
     
-  if not args.diag and os.path.exists(SHM_FILE):
+  if os.path.exists(SHM_FILE):
     os.remove(SHM_FILE)
     
 if __name__ == '__main__':

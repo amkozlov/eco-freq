@@ -34,8 +34,7 @@ def set_governor(gov):
   except ConnectionRefusedError:
     print("ERROR: Connection refused! Please check that EcoFreq daemon is running.")
 
-if __name__ == '__main__':
-
+def main():
   if not os.path.exists(SHM_FILE):
     print("ERROR: File not found:", SHM_FILE)
     print("Please make sure that EcoFreq service is active!")
@@ -116,3 +115,5 @@ if __name__ == '__main__':
       f.write(",".join(vals) + "\n")
 
 
+if __name__ == '__main__':
+  main()

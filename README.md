@@ -20,29 +20,31 @@ Prerequisites:
  - (optional) API token -> [Which real-time CO2/price provider to use?](https://github.com/amkozlov/eco-freq/blob/main/config/README.md/) 
  - (optional) [`ipmitool`](https://github.com/ipmitool/ipmitool) to use IPMI power measurements
 
-
-Please run installer script which will register `systemd` service and create a basic config file for EcoFreq:
+First, install EcoFreq package using `pip` or `pipx`:
 
 ```
 pipx install ecofreq
 ```
 
-Alternatively, you can specify a custom config file (see [examples](https://github.com/amkozlov/eco-freq/blob/main/config)):
+This will install EcoFreq locally under the current (non-privileged) user. Since power limiting typically requires root privileges, you will need sudo permissions to use all features of EcoFreq ([see details](https://github.com/amkozlov/eco-freq/blob/main/doc/INSTALL.md#Permissions)).
 
+Alternatively, you can install and run EcoFreq under root:
 ```
-sudo ./install.sh my.ecofreq.cfg
+sudo pipx install ecofreq
 ```
+This is less secure, but makes configuration simpler. 
 
+For production use, you will likely want to configure EcoFreq daemon to run in the background: ([HOWTO](https://github.com/amkozlov/eco-freq/blob/main/doc/INSTALL.md#Daemon))
 
 ## Usage
 
 * For a quick test of EcoFreq on your system without configuration overhead (using mock CO2 provider): 
 
 ```
-sudo ./ecofreq.py -c config/mock.cfg -l test.log
+ecofreq -c mock -l test.log
 ```
 
-* After installing EcoFreq as a service, you can use standard `systemctl` commands to control it.  
+* After [installing EcoFreq as a service](https://github.com/amkozlov/eco-freq/blob/main/doc/INSTALL.md#Daemon), you can use standard `systemctl` commands to control it. 
 
 ```
 sudo systemctl start ecofreq
@@ -57,23 +59,23 @@ or [configure socket permissions accordingly](https://github.com/amkozlov/eco-fr
 * Show EcoFreq status:
 
 ```
-./ecoctl.py
+ecoctl
 ```
 
 * Change power scaling policy:
 
 ```
-./ecoctl.py policy co2:step:100=0.7:200=0.5
+ecoctl policy co2:step:100=0.7:200=0.5
 
-./ecoctl.py policy const:50%
+ecoctl policy const:50%
 
-./ecoctl.py policy maxperf
+ecoctl policy maxperf
 ```
 
 * Report energy and CO2 for a program run (assuming it runs exclusively -> to be improved): 
 
 ```
-./ecorun.py sleep 10
+ecorun sleep 10
 
 time_s:     10.003
 pwr_avg_w:  88.724
@@ -86,7 +88,7 @@ cost_ct:    0.001
 * Report energy and CO2 statistics for a local EcoFreq instance (default log file):
 
 ```
-./ecostat.py
+ecostat.py
 
 EcoStat v0.0.1
 

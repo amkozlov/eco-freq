@@ -3,7 +3,8 @@ Description=Adjust CPU frequency according to CO2-intensity of the energy mix
 
 [Service]
 Type=simple
-ExecStart=<ECOFREQ_HOME>/ecofreq.py
+ExecStart=<ECOFREQ_CMD>
+User=
 
 [Install]
 WantedBy=multi-user.target
