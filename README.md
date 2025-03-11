@@ -26,7 +26,7 @@ First, install EcoFreq package using `pip` or `pipx`:
 pipx install ecofreq
 ```
 
-This will install EcoFreq locally under the current (non-privileged) user. Since power limiting typically requires root privileges, you will need sudo permissions to use all features of EcoFreq ([see details](https://github.com/amkozlov/eco-freq/blob/main/doc/INSTALL.md#Permissions)).
+This will install EcoFreq locally under the current (non-privileged) user. Since power limiting typically requires root privileges, you will need sudo permissions to use all features of EcoFreq ([see details](https://github.com/amkozlov/eco-freq/blob/dev/doc/INSTALL.md#Permissions)).
 
 Alternatively, you can install and run EcoFreq under root:
 ```
@@ -34,7 +34,7 @@ sudo pipx install ecofreq
 ```
 This is less secure, but makes configuration simpler. 
 
-For production use, you will likely want to configure EcoFreq daemon to run in the background: ([HOWTO](https://github.com/amkozlov/eco-freq/blob/main/doc/INSTALL.md#Daemon))
+For production use, you will likely want to configure EcoFreq daemon to run in the background: ([HOWTO](https://github.com/amkozlov/eco-freq/blob/dev/doc/INSTALL.md#Daemon))
 
 ## Usage
 
@@ -44,7 +44,7 @@ For production use, you will likely want to configure EcoFreq daemon to run in t
 ecofreq -c mock -l test.log
 ```
 
-* After [installing EcoFreq as a service](https://github.com/amkozlov/eco-freq/blob/main/doc/INSTALL.md#Daemon), you can use standard `systemctl` commands to control it. 
+* After [installing EcoFreq as a service](https://github.com/amkozlov/eco-freq/blob/dev/doc/INSTALL.md#Daemon), you can use standard `systemctl` commands to control it. 
 
 ```
 sudo systemctl start ecofreq
