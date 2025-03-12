@@ -5,7 +5,7 @@
 * Show EcoFreq status
 
 ```
-./ecoctl.py
+ecoctl
 ```
 ```
 EcoFreq is RUNNING
@@ -34,7 +34,7 @@ Cost total [EUR]:       0.00027
 * Show current policy
 
 ```
-./ecoctl.py policy
+ecoctl policy
 ```
 ```
 CO2 policy: CPUPowerEcoPolicy(governor = step:100=10.5W:200=7.5W, metric = co2)
@@ -45,7 +45,7 @@ CO2-aware power scaling is now ENABLED
 * Set new policy
 
 ```
-./ecoctl.py policy const:80%
+ecoctl policy const:80%
 ```
 ```
 Old policy: CPUPowerEcoPolicy(governor = step:100=10.5W:200=7.5W, metric = co2)
@@ -57,7 +57,7 @@ CO2-aware power scaling is now ENABLED
 * Show current provider
 
 ```
-./ecoctl.py provider
+ecoctl provider
 ```
 ```
 CO2 provider: all = electricitymaps (interval = 15 s), price = energycharts (interval = 15 s)
@@ -70,7 +70,7 @@ CO2 provider: all = electricitymaps (interval = 15 s), price = energycharts (int
 * Run command and report energy/CO2/cost statistics:
 
 ```
-./ecorun.py <CMD>
+ecorun <CMD>
 ```
 
 ```
@@ -85,15 +85,15 @@ cost_ct:    0.001
 * Run command with a non-default policy:
 
 ```
-./ecorun.py -p maxperf <CMD>
+ecorun -p maxperf <CMD>
 ```
 
 ```
-./ecorun.py -p const:0.8 <CMD>
+ecorun -p const:0.8 <CMD>
 ```
 
 ```
-./ecorun.py -p cpu:const:2000MHz <CMD>
+ecorun -p cpu:const:2000MHz <CMD>
 ```
 
 NOTE: Currently, `ecorun` assumes single-user scenario since it measures system-wide energy consumption and changes global EcoFreq state.
@@ -103,7 +103,7 @@ NOTE: Currently, `ecorun` assumes single-user scenario since it measures system-
 * Report energy and CO2 statistics for a local EcoFreq instance (default log file):
 
 ```
-./ecostat.py
+ecostat
 ```
 ```
 EcoStat v0.0.1
@@ -129,14 +129,14 @@ Idle CO2 [kg]:               44.531762
 * Use a different log file:
 
 ```
-./ecostat.py -l myserver.log
+ecostat -l myserver.log
 ```
 
 
 * Limit time interval:
 
 ```
-./ecostat.py --start 2024-01-01 --end 2024-02-01
+ecostat --start 2024-01-01 --end 2024-02-01
 ```
 
 

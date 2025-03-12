@@ -13,6 +13,8 @@ class EcofreqInstaller(object):
     cmd = [str(cls.INSTALL_SH), "-e", efscript]
     if args.duser:
       cmd += ["-u", args.duser]
+    if args.dgroup:
+      cmd += ["-g", args.dgroup]
     if args.cfg_file:
       cmd += ["-c", args.cfg_file]
 #    print(cmd)

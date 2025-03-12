@@ -397,7 +397,7 @@ def parse_args():
   parser.add_argument("-l", dest="log_fname", default=None, help="Log file name.")
   parser.add_argument("-t", dest="co2token", default=None, help="CO2Signal token.")
   parser.add_argument("-i", dest="interval", default=None, help="Provider polling interval in seconds.")
-  parser.add_argument("--user", dest="usermode", default=False, action="store_true", 
+  parser.add_argument("--user", dest="usermode", action="store_true", 
                       help="Run in rootless mode (limited functionality)")
   
   subparsers = parser.add_subparsers(dest="subcommand")
@@ -410,6 +410,8 @@ def parse_args():
     real_login = None  
   install_parser.add_argument("-u", dest="duser", default=real_login, 
                               help="User to run EcoFreq daemon")
+  install_parser.add_argument("-g", dest="dgroup", default="ecofreq", 
+                              help="User group for EcoFreq daemon (default: ecofreq)")
   install_parser.set_defaults(func=cmd_install)  
 
   remove_parser = subparsers.add_parser(
@@ -420,7 +422,9 @@ def parse_args():
   info_parser = subparsers.add_parser(
       "info", help="Show system info and exit."
   )
-  info_parser.set_defaults(func=cmd_info)  
+  info_parser.add_argument("--sudo", dest="usermode", action="store_false", 
+                      help="Run in rootful mode (elevate with sudo if needed)")
+  info_parser.set_defaults(func=cmd_info, usermode=True)  
 
   showcfg_parser = subparsers.add_parser(
       "showcfg", help="Print EcoFreq configuration."

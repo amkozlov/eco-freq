@@ -8,7 +8,7 @@ uninstall=0
 usesudo=1
 ecocmd=`readlink -f $scriptdir/../ecofreq.py`
 #ecouser=$logname
-#ecogroup=ecofreq
+ecogroup=ecofreq
 userline=
 
 usage() 
