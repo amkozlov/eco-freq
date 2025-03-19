@@ -72,3 +72,19 @@ Allow access for any user (not recommended):
 filemode=0o666
 ```
 
+## Suspend-on-Idle
+
+EcoFreq can automatically detect idling and switch to the low-energy standby mode (suspend-to-RAM).
+For instance, to suspend after 15 min (900 s) at <10% CPU utilization, add these lines to your config file:
+
+```
+[idle]
+IdleMonitor=on
+LoadCutoff=0.10
+# 1 = 1min average, 2 = 5min, 3 = 15min
+LoadPeriod=1
+# Switch to low-energy standby mode (suspend) after x seconds of idling
+SuspendAfter=900
+```
+**WARNING**: Before enabling this feature, please check that [Wake-on-LAN](https://wiki.archlinux.org/title/Wake-on-LAN) is enabled. 
+Then you can later wake up a suspended system by sending a 'magic packet' (e.g., `wakeonlan <MAC>`).

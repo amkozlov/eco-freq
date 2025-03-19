@@ -65,14 +65,14 @@ fi
 echo -e "Step 1: Create users and groups...\n"
 
 if [ ! -z $ecogroup ]; then
-  addgroup $ecogroup
+  groupadd -f $ecogroup
 fi
 
 if [ ! -z $ecouser ]; then
 
   ecogroup=${ecogroup:-ecofreq}
 
-  adduser $ecouser $ecogroup
+  usermod -aG $ecogroup $ecouser
 
   echo -e "Step 2: Add sudoers.d file to run ecofreq daemon without password...\n"
 
@@ -89,7 +89,7 @@ if [ $usesudo -eq 1 ]; then
   ecocmd="sudo $ecocmd"
 fi
 
-sed -e "s#<ECOFREQ_CMD>#$ecocmd#" -e "s#User=#$userline#" $scriptdir/ecofreq.service > $servicehome/ecofreq.service
+sed -e "s#<ECOFREQ_CMD>#$ecocmd#" -e "s#User=#$userline#" -e "s#<ECOFREQ_GROUP>#$ecogroup#" $scriptdir/ecofreq.service > $servicehome/ecofreq.service
 
 systemctl daemon-reload
 

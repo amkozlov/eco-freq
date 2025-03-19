@@ -47,6 +47,13 @@ Check that EcoFreq daemon is up and running:
 ecoctl
 ```
 
+You can disable `systemd` service and remove all respective files by running
+
+```
+ecofreq remove
+```
+
+
 ## Permissions
 
 By default, EcoFreq will try to obtain root permissions (`sudo`) which are (unfortunately) required for most power scaling methods. 
