@@ -3,6 +3,7 @@ from math import ceil
 from ecofreq.monitors.energy import EnergyMonitor
 from ecofreq.monitors.freq import FreqMonitor, CPUFreqMonitor
 from ecofreq.monitors.idle import IdleMonitor
+from ecofreq.helpers import CpuFreqHelper
 
 class MonitorManager(object):
   def __init__(self, config):
@@ -65,6 +66,12 @@ class MonitorManager(object):
       if issubclass(type(m), EnergyMonitor):
         result += m.get_last_avg_power()
     return result
+
+  def get_last_cpu_avg_freq(self, unit=CpuFreqHelper.MHZ):
+    for m in self.monitors:
+      if issubclass(type(m), CPUFreqMonitor):
+        return m.get_last_avg_freq(unit)
+    return None
 
   def get_period_cpu_avg_freq(self, unit):
     for m in self.monitors:

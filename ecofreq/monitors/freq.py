@@ -6,10 +6,12 @@ class FreqMonitor(Monitor):
   def __init__(self, config):
     Monitor.__init__(self, config)
     self.period_freq = 0
+    self.last_freq = 0
 
   def reset_period(self):
     Monitor.reset_period(self)
     self.period_freq = 0
+    self.last_freq = 0
 
   @classmethod
   def from_config(cls, config):
@@ -42,6 +44,7 @@ class CPUFreqMonitor(FreqMonitor):
     frac_new = 1. / (self.period_samples + 1)
     frac_old = self.period_samples * frac_new
     self.period_freq = frac_old * self.period_freq + frac_new * avg_freq
+    self.last_freq = avg_freq
 
   def update_impl(self):
     self.update_freq()
@@ -49,3 +52,5 @@ class CPUFreqMonitor(FreqMonitor):
   def get_period_avg_freq(self, unit=CpuFreqHelper.KHZ):
     return self.period_freq / unit
      
+  def get_last_avg_freq(self, unit=CpuFreqHelper.KHZ):
+    return self.last_freq / unit

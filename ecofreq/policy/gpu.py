@@ -21,6 +21,10 @@ class GPUEcoPolicy(EcoPolicy):
       if isclass(cls) and issubclass(cls, GPUEcoPolicy):
         return cls(config)
 
+    # disable GPU policy if there are no GPUs  
+    if not NvidiaGPUHelper.available():
+      return None
+
     # otherwise, look for a generic policy type
     c = c.lower()
     if c == "auto":

@@ -52,6 +52,7 @@ class EcoFreqController(object):
     else:
       res['idle_state'] = "NA"
     res['avg_power'] = self.ef.monitor.get_last_avg_power()
+    res['avg_freq'] = self.ef.monitor.get_last_cpu_avg_freq()
     res['total_energy_j'] = self.ef.monitor.get_total_energy()
     res['total_co2'] = self.ef.total_co2
     res['total_cost'] = self.ef.total_cost

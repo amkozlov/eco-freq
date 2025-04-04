@@ -69,7 +69,7 @@ class EcoPolicyManager(object):
       field = EcoProvider.FIELD_INDEX
     else:
       field = EcoProvider.FIELD_CO2
-    if co2_data[field]:
+    if not co2_data[field] is None:
       val = co2_data[field]
       for p in self.policies:
         p.set_co2(val)
