@@ -10,7 +10,7 @@ In many regions with a high share of renewables - such as Germany, Spain, UK or 
 And it gets even better if you have dynamic electricity pricing (e.g., [Octopus](https://octopus.energy/smart/agile/), [Tibber](https://tibber.com/en) etc.) or on-site solar panels: (being an) EcoFreq can save you a few cents ;)
 
 **TL;DR Compute faster when electricity is abundant and green, throttle down when it is expensive and dirty:**
-![](https://github.com/amkozlov/eco-freq/blob/main/img/ecofreq_tldr.png?raw=true)
+![](https://github.com/amkozlov/eco-freq/blob/dev/img/ecofreq_tldr.png?raw=true)
 
 ## Installation
 
